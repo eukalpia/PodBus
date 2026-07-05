@@ -3,7 +3,7 @@
 PodBus is split into small Dart packages:
 
 - `podbus_core`: stable transport-agnostic contracts.
-- `podbus_nats`: NATS Core adapter and future JetStream work.
+- `podbus_nats`: NATS Core adapter and JetStream durable job queue.
 - `podbus_rabbitmq`: RabbitMQ adapter package.
 - `podbus_kafka`: experimental Kafka event-log adapter.
 - `podbus_serverpod`: optional Serverpod bridge.

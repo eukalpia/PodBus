@@ -15,4 +15,12 @@ workspace:
 
 dev_dependencies:
   lints: ^6.0.0
+  podbus_core:
+    path: packages/podbus_core
+  podbus_kafka:
+    path: packages/podbus_kafka
+  podbus_nats:
+    path: packages/podbus_nats
+  podbus_rabbitmq:
+    path: packages/podbus_rabbitmq
   test: ^1.26.0
