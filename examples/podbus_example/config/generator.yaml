@@ -1,0 +1,3 @@
+type: server
+client_package_path: ../podbus_example_client
+server_test_tools_path: test/integration/test_tools

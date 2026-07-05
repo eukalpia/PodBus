@@ -1,5 +1,5 @@
 name: podbus_example
-description: Example application wiring PodBus messaging adapters.
+description: Serverpod example application wiring PodBus messaging adapters.
 version: 0.1.0-dev
 publish_to: none
 
@@ -9,6 +9,7 @@ environment:
 resolution: workspace
 
 dependencies:
+  serverpod: 3.4.9
   podbus_core:
     path: ../../packages/podbus_core
   podbus_nats:
@@ -22,4 +23,9 @@ dependencies:
 
 dev_dependencies:
   lints: ^6.0.0
+  serverpod_test: 3.4.9
   test: ^1.26.0
+
+serverpod:
+  scripts:
+    start: dart bin/main.dart --apply-migrations

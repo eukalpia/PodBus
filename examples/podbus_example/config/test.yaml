@@ -1,0 +1,32 @@
+apiServer:
+  port: 0
+  publicHost: localhost
+  publicPort: 0
+  publicScheme: http
+
+insightsServer:
+  port: 0
+  publicHost: localhost
+  publicPort: 0
+  publicScheme: http
+
+webServer:
+  port: 0
+  publicHost: localhost
+  publicPort: 0
+  publicScheme: http
+
+database:
+  host: localhost
+  port: 5432
+  name: podbus_test
+  user: podbus
+
+redis:
+  enabled: false
+  host: localhost
+  port: 6379
+
+sessionLogs:
+  persistentEnabled: true
+  consoleEnabled: true

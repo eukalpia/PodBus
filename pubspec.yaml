@@ -11,6 +11,7 @@ workspace:
   - packages/podbus_kafka
   - packages/podbus_serverpod
   - examples/podbus_example
+  - examples/podbus_example_client
 
 dev_dependencies:
   lints: ^6.0.0

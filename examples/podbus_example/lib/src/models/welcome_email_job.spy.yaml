@@ -1,0 +1,4 @@
+class: WelcomeEmailJob
+fields:
+  leadId: int
+  email: String

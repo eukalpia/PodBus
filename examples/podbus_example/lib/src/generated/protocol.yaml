@@ -1,0 +1,5 @@
+lead:
+  - createLead:
+  - publishLeadCreatedEvent:
+  - enqueueWelcomeEmailJob:
+  - requestLeadScoring:

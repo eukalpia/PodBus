@@ -1,0 +1,4 @@
+class: LeadScore
+fields:
+  leadId: int
+  score: int

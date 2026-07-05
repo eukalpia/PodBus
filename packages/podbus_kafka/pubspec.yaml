@@ -10,6 +10,7 @@ environment:
 resolution: workspace
 
 dependencies:
+  kafka_dart: ^1.0.2-alpha
   meta: ^1.17.0
   podbus_core:
     path: ../podbus_core

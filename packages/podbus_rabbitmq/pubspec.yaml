@@ -10,6 +10,7 @@ environment:
 resolution: workspace
 
 dependencies:
+  dart_amqp: ^0.3.1
   meta: ^1.17.0
   podbus_core:
     path: ../podbus_core

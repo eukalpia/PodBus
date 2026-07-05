@@ -1,0 +1,12 @@
+name: podbus_example_client
+description: Client package generated for the PodBus Serverpod example.
+version: 0.1.0-dev
+publish_to: none
+
+environment:
+  sdk: ^3.12.0
+
+resolution: workspace
+
+dependencies:
+  serverpod_client: 3.4.9
