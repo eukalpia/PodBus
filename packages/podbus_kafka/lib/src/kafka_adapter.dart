@@ -1,8 +1,5 @@
-import 'dart:convert';
-
-import 'package:kafka_dart/kafka_dart.dart' as kafka;
-
 import 'config.dart';
+import 'native_kafka_client.dart';
 
 abstract interface class KafkaAdapter {
   bool get isConnected;
@@ -52,7 +49,11 @@ final class KafkaAdapterRecord {
 }
 
 final class DartKafkaAdapter implements KafkaAdapter {
-  kafka.KafkaProducerService? _producer;
+  DartKafkaAdapter({NativeKafkaLibrary? nativeLibrary})
+    : _nativeLibrary = nativeLibrary ?? NativeKafkaLibrary();
+
+  final NativeKafkaLibrary _nativeLibrary;
+  NativeKafkaProducer? _producer;
   final List<KafkaAdapterConsumer> _consumers = [];
   KafkaMessagingConfig? _config;
   var _connected = false;
@@ -67,16 +68,17 @@ final class DartKafkaAdapter implements KafkaAdapter {
       await consumer.close();
     }
     _consumers.clear();
-    await _producer?.close();
+    _producer?.close();
     _producer = null;
     _config = null;
   }
 
   @override
   Future<void> connect(KafkaMessagingConfig config) async {
-    final producer = await kafka.KafkaFactory.createAndInitializeProducer(
-      bootstrapServers: config.brokers.join(','),
-      additionalProperties: {'client.id': config.clientId},
+    final bindings = _nativeLibrary.open();
+    final producer = NativeKafkaProducer.connect(
+      bindings,
+      _producerProperties(config),
     );
     _producer = producer;
     _config = config;
@@ -92,16 +94,11 @@ final class DartKafkaAdapter implements KafkaAdapter {
     if (config == null) {
       throw StateError('Kafka adapter is not connected.');
     }
-    final consumer = await kafka.KafkaFactory.createAndInitializeConsumer(
-      bootstrapServers: config.brokers.join(','),
-      groupId: groupId,
-      additionalProperties: {
-        'client.id': config.clientId,
-        'enable.auto.commit': 'false',
-        'auto.offset.reset': 'earliest',
-      },
+    final consumer = NativeKafkaConsumer.connect(
+      bindings: _nativeLibrary.open(),
+      topics: topics,
+      properties: _consumerProperties(config, groupId),
     );
-    await consumer.subscribe(topics);
     final adapterConsumer = _DartKafkaAdapterConsumer(consumer);
     _consumers.add(adapterConsumer);
     return adapterConsumer;
@@ -109,7 +106,7 @@ final class DartKafkaAdapter implements KafkaAdapter {
 
   @override
   Future<void> flush([Duration? timeout]) async {
-    await _producer?.flush(timeout);
+    _producer?.flush(timeout ?? const Duration(seconds: 10));
   }
 
   @override
@@ -122,36 +119,53 @@ final class DartKafkaAdapter implements KafkaAdapter {
     if (producer == null) {
       throw StateError('Kafka adapter is not connected.');
     }
-    await producer.sendMessage(
-      topic: topic,
-      payload: utf8.decode(bytes),
-      key: key,
-    );
+    producer.produce(topic: topic, payload: bytes, key: key);
+  }
+
+  Map<String, String> _producerProperties(KafkaMessagingConfig config) {
+    return {
+      'bootstrap.servers': config.brokers.join(','),
+      'client.id': config.clientId,
+    };
+  }
+
+  Map<String, String> _consumerProperties(
+    KafkaMessagingConfig config,
+    String groupId,
+  ) {
+    return {
+      'bootstrap.servers': config.brokers.join(','),
+      'client.id': config.clientId,
+      'group.id': groupId,
+      'enable.auto.commit': 'false',
+      'enable.auto.offset.store': 'false',
+      'auto.offset.reset': 'earliest',
+    };
   }
 }
 
 final class _DartKafkaAdapterConsumer implements KafkaAdapterConsumer {
   const _DartKafkaAdapterConsumer(this._consumer);
 
-  final kafka.KafkaConsumerService _consumer;
+  final NativeKafkaConsumer _consumer;
 
   @override
-  Future<void> close() => _consumer.close();
+  Future<void> close() async => _consumer.close();
 
   @override
-  Future<void> commit() => _consumer.commitAsync();
+  Future<void> commit() async => _consumer.commit();
 
   @override
   Future<KafkaAdapterRecord?> poll(Duration timeout) async {
-    final message = await _consumer.pollMessage(timeout);
+    final message = _consumer.poll(timeout);
     if (message == null) {
       return null;
     }
     return KafkaAdapterRecord(
-      topic: message.topic.value,
-      bytes: utf8.encode(message.payload.value),
-      key: message.key.value,
-      partition: message.partition.value,
+      topic: message.topic,
+      bytes: message.payload,
+      key: message.key,
+      partition: message.partition,
       offset: message.offset,
       rawMessage: message,
     );

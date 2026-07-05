@@ -10,6 +10,7 @@ environment:
 resolution: workspace
 
 dependencies:
+  ffi: ^2.1.4
   kafka_dart: ^1.0.2-alpha
   meta: ^1.17.0
   podbus_core:

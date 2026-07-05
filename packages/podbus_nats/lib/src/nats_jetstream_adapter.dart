@@ -120,7 +120,7 @@ final class DartNatsJetStreamAdapter implements NatsJetStreamAdapter {
     required String consumerName,
     required String topic,
   }) async {
-    final consumer = await _js.createOrUpdateConsumer<Object?>(
+    final consumer = await _js.createOrUpdateConsumer<dynamic>(
       streamName,
       nats.ConsumerConfig(
         durable: consumerName,
@@ -187,7 +187,7 @@ final class DartNatsJetStreamAdapter implements NatsJetStreamAdapter {
 final class _DartNatsJetStreamConsumer implements NatsJetStreamConsumer {
   const _DartNatsJetStreamConsumer(this._consumer);
 
-  final nats.Consumer<Object?> _consumer;
+  final nats.Consumer<dynamic> _consumer;
 
   @override
   Future<List<NatsJetStreamMessage>> fetch({
@@ -202,7 +202,7 @@ final class _DartNatsJetStreamConsumer implements NatsJetStreamConsumer {
 final class _DartNatsJetStreamMessage implements NatsJetStreamMessage {
   const _DartNatsJetStreamMessage(this._message);
 
-  final nats.Message<Object?> _message;
+  final nats.Message<dynamic> _message;
 
   @override
   String get subject => _message.subject ?? '';

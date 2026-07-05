@@ -134,7 +134,7 @@ final class DartNatsClientAdapter implements NatsClientAdapter {
     required Duration timeout,
     Map<String, String> headers = const {},
   }) async {
-    final message = await _client.request<Object?>(
+    final message = await _client.request<dynamic>(
       subject,
       Uint8List.fromList(bytes),
       timeout: timeout,
@@ -145,11 +145,11 @@ final class DartNatsClientAdapter implements NatsClientAdapter {
 
   @override
   NatsClientSubscription subscribe(String subject, {String? queueGroup}) {
-    final subscription = _client.sub<Object?>(subject, queueGroup: queueGroup);
+    final subscription = _client.sub<dynamic>(subject, queueGroup: queueGroup);
     return _DartNatsClientSubscription(_client, subscription);
   }
 
-  NatsClientMessage _fromDartNatsMessage(nats.Message<Object?> message) {
+  NatsClientMessage _fromDartNatsMessage(nats.Message<dynamic> message) {
     final subject = message.subject;
     return NatsClientMessage(
       subject: subject ?? '',
@@ -178,7 +178,7 @@ final class _DartNatsClientSubscription implements NatsClientSubscription {
   _DartNatsClientSubscription(this._client, this._subscription);
 
   final nats.Client _client;
-  final nats.Subscription<Object?> _subscription;
+  final nats.Subscription<dynamic> _subscription;
 
   @override
   Stream<NatsClientMessage> get messages {

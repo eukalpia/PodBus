@@ -431,15 +431,16 @@ final class _KafkaSubscription implements Subscription {
 
   Future<void> _run() async {
     while (!_closed) {
-      final record = await consumer.poll(pollTimeout);
-      if (record == null) {
-        continue;
-      }
       try {
+        final record = await consumer.poll(pollTimeout);
+        if (record == null) {
+          continue;
+        }
         await process(record);
       } on Object catch (error, stackTrace) {
         lastError = error;
         lastStackTrace = stackTrace;
+        await Future<void>.delayed(const Duration(milliseconds: 200));
       }
     }
   }
@@ -481,15 +482,16 @@ final class _KafkaWorker implements Worker {
 
   Future<void> _run() async {
     while (!_closed) {
-      final record = await consumer.poll(pollTimeout);
-      if (record == null) {
-        continue;
-      }
       try {
+        final record = await consumer.poll(pollTimeout);
+        if (record == null) {
+          continue;
+        }
         await process(record);
       } on Object catch (error, stackTrace) {
         lastError = error;
         lastStackTrace = stackTrace;
+        await Future<void>.delayed(const Duration(milliseconds: 200));
       }
     }
   }
