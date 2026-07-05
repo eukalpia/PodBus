@@ -1,0 +1,17 @@
+name: podbus_workspace
+publish_to: none
+
+environment:
+  sdk: ^3.12.0
+
+workspace:
+  - packages/podbus_core
+  - packages/podbus_nats
+  - packages/podbus_rabbitmq
+  - packages/podbus_kafka
+  - packages/podbus_serverpod
+  - examples/podbus_example
+
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.26.0

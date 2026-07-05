@@ -1,0 +1,25 @@
+name: podbus_example
+description: Example application wiring PodBus messaging adapters.
+version: 0.1.0-dev
+publish_to: none
+
+environment:
+  sdk: ^3.12.0
+
+resolution: workspace
+
+dependencies:
+  podbus_core:
+    path: ../../packages/podbus_core
+  podbus_nats:
+    path: ../../packages/podbus_nats
+  podbus_rabbitmq:
+    path: ../../packages/podbus_rabbitmq
+  podbus_kafka:
+    path: ../../packages/podbus_kafka
+  podbus_serverpod:
+    path: ../../packages/podbus_serverpod
+
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.26.0

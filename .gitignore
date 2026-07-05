@@ -1,0 +1,9 @@
+.dart_tool/
+.packages
+build/
+coverage/
+pubspec.lock
+
+.DS_Store
+
+docker-data/
