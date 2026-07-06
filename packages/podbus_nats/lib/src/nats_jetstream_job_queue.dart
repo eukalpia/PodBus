@@ -96,21 +96,30 @@ final class NatsJetStreamJobQueue implements DurableJobQueue {
       retryPolicy,
     );
     final key = idempotencyKey ?? effectiveHeaders.idempotencyKey;
+    var claimedKey = false;
     if (key != null && _idempotencyStore != null) {
       final claimed = await _idempotencyStore.claim(key, ttl: _idempotencyTtl);
       if (!claimed) {
         return;
       }
+      claimedKey = true;
     }
 
-    final encoded = await _codec.encode(payload);
-    await _adapter.publish(
-      topic,
-      encoded.bytes,
-      timeout: config.requestTimeout,
-      messageId: key,
-      headers: _headersFor(effectiveHeaders, encoded),
-    );
+    try {
+      final encoded = await _codec.encode(payload);
+      await _adapter.publish(
+        topic,
+        encoded.bytes,
+        timeout: config.requestTimeout,
+        messageId: key,
+        headers: _headersFor(effectiveHeaders, encoded),
+      );
+    } on Object catch (error, stackTrace) {
+      if (claimedKey && key != null) {
+        await _idempotencyStore!.release(key);
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    }
   }
 
   @override

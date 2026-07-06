@@ -177,6 +177,30 @@ void main() {
       await queue.close();
     });
 
+    test('releases idempotency key when publish fails', () async {
+      final adapter = FakeNatsJetStreamAdapter()
+        ..publishError = StateError('publish failed');
+      final queue = NatsJetStreamJobQueue(
+        config: _config(),
+        jetStreamAdapter: adapter,
+        idempotencyStore: InMemoryIdempotencyStore(),
+      );
+      await queue.connect();
+
+      await expectLater(
+        queue.enqueue('jobs.email', {'leadId': 7}, idempotencyKey: 'welcome-7'),
+        throwsA(isA<StateError>()),
+      );
+
+      adapter.publishError = null;
+      await queue.enqueue('jobs.email', {
+        'leadId': 7,
+      }, idempotencyKey: 'welcome-7');
+
+      expect(adapter.published.single.messageId, 'welcome-7');
+      await queue.close();
+    });
+
     test('rejects invalid fetch batch size', () {
       expect(
         () => NatsJetStreamJobQueue(
@@ -225,6 +249,7 @@ final class FakeNatsJetStreamAdapter implements NatsJetStreamAdapter {
   final createdStreams = <NatsJetStreamConfig>[];
   final published = <FakeJetStreamPublish>[];
   final consumers = <FakeNatsJetStreamConsumer>[];
+  Object? publishError;
   var connected = false;
 
   @override
@@ -274,6 +299,10 @@ final class FakeNatsJetStreamAdapter implements NatsJetStreamAdapter {
     String? messageId,
     Map<String, String> headers = const {},
   }) async {
+    final error = publishError;
+    if (error != null) {
+      throw error;
+    }
     published.add(FakeJetStreamPublish(subject, bytes, headers, messageId));
     return const NatsJetStreamPublishAck(
       stream: 'PODBUS_TESTS',

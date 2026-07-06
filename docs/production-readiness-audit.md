@@ -149,42 +149,36 @@ size, consumer-group parallelism, or commit cadence.
    mandatory-return handling is still missing. A publish accepted by the broker
    can still be unroutable if topology is wrong.
 
-2. NATS JetStream idempotency is claimed before publish is confirmed.
-
-   If enqueue claims an idempotency key and encode or publish fails afterward,
-   a retry with the same key can be suppressed until the idempotency entry
-   expires.
-
-3. Malformed broker headers can bypass normal failure handling.
+2. Malformed broker headers can bypass normal failure handling.
 
    NATS JetStream and RabbitMQ parse headers before the guarded processing path
    in important places. Bad `attempt` or retry-policy headers can leave messages
    unacked and repeatedly redelivered.
 
-4. NATS Core event handlers run without bounded backpressure.
+3. NATS Core event handlers run without bounded backpressure.
 
    Core subscriptions dispatch handler futures without tracking active work.
    Under load this can create unbounded in-flight processing, unhandled async
    errors, and shutdown that does not wait for active handlers.
 
-5. Kafka producer publish currently means "queued locally", not "delivered".
+4. Kafka producer publish currently means "queued locally", not "delivered".
 
    The native adapter does not expose per-message delivery reports. Broker-side
    delivery failures after local enqueue are not visible to callers.
 
-6. Kafka failed offsets stop the consumer loop.
+5. Kafka failed offsets stop the consumer loop.
 
    The adapter no longer continues past a failed record without dead-letter
    policy, which avoids committing a later offset over the failed record.
    There is still no automatic retry topic, partition pause/resume, or recovery
    strategy beyond surfacing the failed loop through health checks.
 
-7. `amqps://` RabbitMQ configuration does not yet prove TLS is active.
+6. `amqps://` RabbitMQ configuration does not yet prove TLS is active.
 
    The config accepts a URI, but the adapter needs explicit `amqp`/`amqps`
    validation, TLS setup, and default port handling.
 
-8. Example Serverpod endpoints expose internal messaging operations.
+7. Example Serverpod endpoints expose internal messaging operations.
 
    The example client can call methods that publish events and enqueue jobs.
    That is acceptable for a demo only if documented and guarded before any
@@ -198,14 +192,13 @@ size, consumer-group parallelism, or commit cadence.
 - Add bounded concurrency or explicit backpressure for Core subscriptions.
 - Move JetStream header parsing into the guarded failure path.
 - Make delayed NAK broker-side, not a client-side sleep that holds a worker.
-- Add idempotency pending/commit/release semantics or rely on JetStream
-  `messageId` after publish acknowledgement.
+- Keep idempotency release-on-publish-failure behavior covered for future
+  stores; consider relying more directly on JetStream `messageId`.
 - Expose consumer tuning for ack wait, max pending, max deliveries, batch
   fetch, heartbeat/in-progress, stream retention, and redelivery policy.
 - Redact and cap dead-letter error details.
-- Add tests for malformed headers, failed ack/nak/term, publish failure after
-  idempotency claim, delayed NAK, close under active handlers, and long-running
-  job redelivery.
+- Add tests for malformed headers, failed ack/nak/term, delayed NAK, close under
+  active handlers, and long-running job redelivery.
 
 ### RabbitMQ
 
