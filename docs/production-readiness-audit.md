@@ -6,7 +6,73 @@ This audit combines local Docker-backed stress runs with a static review of the
 transport adapters, example app, and documentation. It is not a benchmark and
 does not claim production capacity.
 
-## Stress Smoke Results
+## Stress Runner
+
+`tool/stress_transports.dart` now runs an explicit benchmark matrix instead of
+one undifferentiated happy-path test. It records the parameters in the output:
+
+- payload size
+- acknowledgement mode
+- durability mode
+- publisher-confirm support
+- consumer count
+- producer window
+- broker label
+- local machine summary
+
+The runner has four modes:
+
+- `fast`: maximum-speed event delivery paths, accepting weaker delivery
+  guarantees.
+- `durable`: durable/replayable paths where the adapter claims them.
+- `worker`: queue-style processing with manual ack/commit and optional handler
+  delay.
+- `failure`: handler throws, redelivery/dead-letter behavior is observed where
+  the adapter can prove it.
+
+Unsupported or unproven combinations are reported as `skipped`. Kafka failure
+mode is currently skipped because the adapter still needs corrected DLQ publish,
+delivery flush, and offset commit semantics before that scenario can be trusted.
+
+## Current 100K Matrix Smoke Results
+
+Environment:
+
+- macOS local development machine, 14 CPUs, 24 GB RAM
+- Docker services from `docker-compose.integration.yaml`
+- NATS `2.10`
+- RabbitMQ `3.13-management`
+- Kafka `apache/kafka:3.9.0`
+- payload size: 256 bytes
+- producer window: 16
+- consumers/workers: 1
+
+Command:
+
+```bash
+PODBUS_STRESS_MESSAGES=100000 PODBUS_STRESS_MODES=fast,durable,worker PODBUS_STRESS_TRANSPORTS=nats,jetstream,rabbitmq,kafka PODBUS_STRESS_PAYLOAD_SIZES=256 PODBUS_STRESS_CONSUMERS=1 PODBUS_STRESS_PRODUCERS=16 PODBUS_STRESS_HANDLER_SLEEP_MS=0 dart run tool/stress_transports.dart
+```
+
+Results:
+
+| Mode | Transport | Received | Total elapsed | Approx throughput | Notes |
+| --- | --- | ---: | ---: | ---: | --- |
+| fast | NATS Core | 100000 / 100000 | 1192 ms | 83854.9 msg/s | At-most-once Core pub/sub |
+| fast | RabbitMQ | 100000 / 100000 | 12254 ms | 8160.2 msg/s | Non-persistent fast path |
+| fast | Kafka | 100000 / 100000 | 16239 ms | 6157.7 msg/s | Untuned single-topic event log |
+| durable | NATS JetStream | 100000 / 100000 | 12005 ms | 8329.2 msg/s | File storage and explicit ack |
+| durable | RabbitMQ | 100000 / 100000 | 10911 ms | 9164.5 msg/s | Persistent messages; publisher confirms not implemented |
+| durable | Kafka | 100000 / 100000 | 13433 ms | 7444.1 msg/s | Manual offset commit; acks and partitions not configurable |
+| worker | NATS JetStream | 100000 / 100000 | 11941 ms | 8373.9 msg/s | Manual ack worker |
+| worker | RabbitMQ | 100000 / 100000 | 10914 ms | 9162.5 msg/s | Manual ack worker; delayed retry uses client-side sleep |
+| worker | Kafka | 100000 / 100000 | 15104 ms | 6620.6 msg/s | Single consumer worker; partition parallelism not tuned |
+
+NATS Core is skipped in durable and worker modes because it has no broker-side
+durable replay or queue semantics. JetStream is skipped in fast mode because it
+is the durable NATS path. Failure mode was covered separately with a smaller
+run; Kafka failure mode remains skipped for the correctness reasons above.
+
+## Historical Stress Smoke Results
 
 Environment:
 
@@ -62,10 +128,15 @@ Results:
 | RabbitMQ | 100000 / 100000 | 2182 ms | 45813.1 msg/s |
 | Kafka | 100000 / 100000 | 17188 ms | 5817.8 msg/s |
 
-No message loss was observed in these three local happy-path runs. The stress
-tool does not yet test broker restarts, network partitions, malformed messages,
-consumer crashes, disk pressure, authentication failures, or multi-node broker
-clusters.
+No message loss was observed in these three historical local happy-path runs.
+They predate the current multi-mode matrix runner. They did not test broker
+restarts, network partitions, malformed messages, consumer crashes, disk
+pressure, authentication failures, or multi-node broker clusters.
+
+The Kafka result should be read as a measurement of the current PodBus adapter
+and this single-topic local Docker scenario, not as a statement about Kafka's
+capacity. This run does not tune partitions, producer batching, linger, batch
+size, consumer-group parallelism, or commit cadence.
 
 ## Highest Priority Issues
 
@@ -153,6 +224,9 @@ clusters.
 
 - Fix per-partition commit ordering so failed offsets cannot be skipped.
 - Add delivery report handling or document an explicit fire-and-forget mode.
+- Add producer and consumer tuning for partitions, batching, linger, batch
+  size, commit cadence, and consumer-group parallelism before drawing
+  performance conclusions.
 - Add security config for TLS/SASL and validated librdkafka properties.
 - Reject relative `PODBUS_LIBRDKAFKA_PATH` values and document the variable as
   trusted startup configuration only.

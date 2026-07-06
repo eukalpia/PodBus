@@ -151,10 +151,56 @@ void main() {
         await queue.close();
       },
     );
+
+    test('fetches JetStream jobs in configured batches', () async {
+      final adapter = FakeNatsJetStreamAdapter();
+      final queue = NatsJetStreamJobQueue(
+        config: _config(),
+        jetStreamAdapter: adapter,
+        fetchBatchSize: 8,
+        fetchTimeout: const Duration(milliseconds: 10),
+      );
+      await queue.connect();
+
+      final worker = await queue.worker<Map<String, Object?>>(
+        'jobs.email',
+        durableName: 'email-workers',
+        handler: (_, _) async {},
+      );
+
+      await _waitFor(
+        () => adapter.consumers.single.requestedBatches.isNotEmpty,
+      );
+      expect(adapter.consumers.single.requestedBatches, contains(8));
+
+      await worker.close();
+      await queue.close();
+    });
+
+    test('rejects invalid fetch batch size', () {
+      expect(
+        () => NatsJetStreamJobQueue(
+          config: _config(),
+          jetStreamAdapter: FakeNatsJetStreamAdapter(),
+          fetchBatchSize: 0,
+        ),
+        throwsA(isA<MessagingConfigurationException>()),
+      );
+    });
   });
 }
 
 const _testTimeout = Duration(seconds: 2);
+
+Future<void> _waitFor(bool Function() condition) async {
+  final deadline = DateTime.now().add(_testTimeout);
+  while (!condition()) {
+    if (DateTime.now().isAfter(deadline)) {
+      throw TimeoutException('Condition was not met.', _testTimeout);
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+  }
+}
 
 NatsMessagingConfig _config() {
   return NatsMessagingConfig(
@@ -247,6 +293,7 @@ final class FakeNatsJetStreamConsumer implements NatsJetStreamConsumer {
   final String streamName;
   final String consumerName;
   final String topic;
+  final requestedBatches = <int>[];
   final _messages = StreamController<FakeNatsJetStreamMessage>();
 
   void add(FakeNatsJetStreamMessage message) {
@@ -258,6 +305,7 @@ final class FakeNatsJetStreamConsumer implements NatsJetStreamConsumer {
     required int batch,
     required Duration timeout,
   }) async {
+    requestedBatches.add(batch);
     final messages = <NatsJetStreamMessage>[];
     for (var i = 0; i < batch; i += 1) {
       try {

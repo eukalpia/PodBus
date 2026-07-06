@@ -28,9 +28,10 @@ Current limitations:
 - delayed retry currently depends on the client adapter behavior and needs
   broker-side delayed NAK coverage before it should be treated as production
   retry infrastructure
-- consumer tuning is still small: batch size, ack wait, max pending, max
-  deliveries, heartbeat/in-progress behavior, and stream retention knobs need
-  broader configuration and tests
+- `NatsJetStreamJobQueue.fetchBatchSize` controls pull consumer fetch size.
+  Tune it together with `fetchTimeout`; a large batch with a long timeout can
+  make low or uneven traffic slower because the pull request may wait for more
+  messages before returning.
 - dead-letter payloads and error details should be treated as sensitive data
   unless the application explicitly redacts them
 

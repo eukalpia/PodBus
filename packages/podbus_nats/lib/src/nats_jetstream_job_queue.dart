@@ -16,11 +16,19 @@ final class NatsJetStreamJobQueue implements DurableJobQueue {
     IdempotencyStore? idempotencyStore,
     Duration idempotencyTtl = const Duration(hours: 24),
     Duration fetchTimeout = const Duration(seconds: 1),
+    int fetchBatchSize = 1,
   }) : _adapter = jetStreamAdapter ?? DartNatsJetStreamAdapter(),
        _codec = codec ?? const JsonMessageCodec(),
        _idempotencyStore = idempotencyStore,
        _idempotencyTtl = idempotencyTtl,
-       _fetchTimeout = fetchTimeout;
+       _fetchTimeout = fetchTimeout,
+       _fetchBatchSize = fetchBatchSize {
+    if (fetchBatchSize < 1) {
+      throw const MessagingConfigurationException(
+        'NATS JetStream fetch batch size must be greater than zero.',
+      );
+    }
+  }
 
   static const _contentTypeHeader = 'podbus-content-type';
   static const _schemaVersionHeader = 'podbus-schema-version';
@@ -41,6 +49,7 @@ final class NatsJetStreamJobQueue implements DurableJobQueue {
   final IdempotencyStore? _idempotencyStore;
   final Duration _idempotencyTtl;
   final Duration _fetchTimeout;
+  final int _fetchBatchSize;
   final List<_NatsJetStreamWorker<Object?>> _workers = [];
   var _connected = false;
 
@@ -136,6 +145,7 @@ final class NatsJetStreamJobQueue implements DurableJobQueue {
       retryPolicy: retryPolicy,
       deadLetterPolicy: deadLetterPolicy ?? const DeadLetterPolicy.disabled(),
       fetchTimeout: _fetchTimeout,
+      fetchBatchSize: _fetchBatchSize,
       consumer: consumer,
       queue: this,
       handler: handler,
@@ -396,6 +406,7 @@ final class _NatsJetStreamWorker<T> implements Worker {
     required this.retryPolicy,
     required this.deadLetterPolicy,
     required this.fetchTimeout,
+    required this.fetchBatchSize,
     required this.consumer,
     required this.queue,
     required this.handler,
@@ -408,6 +419,7 @@ final class _NatsJetStreamWorker<T> implements Worker {
   final RetryPolicy? retryPolicy;
   final DeadLetterPolicy deadLetterPolicy;
   final Duration fetchTimeout;
+  final int fetchBatchSize;
   final NatsJetStreamConsumer consumer;
   final NatsJetStreamJobQueue queue;
   final Future<void> Function(JobContext context, T payload) handler;
@@ -426,7 +438,10 @@ final class _NatsJetStreamWorker<T> implements Worker {
   Future<void> _run() async {
     while (!_closed) {
       try {
-        final messages = await consumer.fetch(batch: 1, timeout: fetchTimeout);
+        final messages = await consumer.fetch(
+          batch: fetchBatchSize,
+          timeout: fetchTimeout,
+        );
         if (messages.isEmpty) {
           continue;
         }
