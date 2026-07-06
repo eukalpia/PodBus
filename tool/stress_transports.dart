@@ -286,7 +286,7 @@ String? _staticUnsupportedReason(StressScenario scenario) {
     (StressMode.failure, 'nats') =>
       'NATS Core has no broker-side ack, redelivery, or dead-letter semantics.',
     (StressMode.failure, 'kafka') =>
-      'Kafka failure mode is disabled until DLQ publish, delivery flush, and offset commit semantics are fixed in the adapter.',
+      'Kafka failure mode is disabled until DLQ publish and delivery flush semantics are fixed in the adapter.',
     (_, 'nats' || 'jetstream' || 'rabbitmq' || 'kafka') => null,
     _ => 'Unknown transport.',
   };

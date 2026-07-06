@@ -31,8 +31,8 @@ The runner has four modes:
   the adapter can prove it.
 
 Unsupported or unproven combinations are reported as `skipped`. Kafka failure
-mode is currently skipped because the adapter still needs corrected DLQ publish,
-delivery flush, and offset commit semantics before that scenario can be trusted.
+mode is currently skipped because the adapter still needs corrected DLQ publish
+and delivery flush semantics before that scenario can be trusted.
 
 ## Current 100K Matrix Smoke Results
 
@@ -143,41 +143,41 @@ size, consumer-group parallelism, or commit cadence.
 
 ## Highest Priority Issues
 
-1. Kafka can commit past a failed record.
-
-   A failed handler is recorded as an error, but the consumer loop can continue
-   polling. If a later record from the same partition succeeds and commits, the
-   failed offset can be skipped. This breaks the documented "failed handler does
-   not commit" behavior and is the first Kafka correctness issue to fix.
-
-2. RabbitMQ unroutable retry and dead-letter publishes are not detected.
+1. RabbitMQ unroutable retry and dead-letter publishes are not detected.
 
    Publisher confirms are now used before the original delivery is acked, but
    mandatory-return handling is still missing. A publish accepted by the broker
    can still be unroutable if topology is wrong.
 
-3. NATS JetStream idempotency is claimed before publish is confirmed.
+2. NATS JetStream idempotency is claimed before publish is confirmed.
 
    If enqueue claims an idempotency key and encode or publish fails afterward,
    a retry with the same key can be suppressed until the idempotency entry
    expires.
 
-4. Malformed broker headers can bypass normal failure handling.
+3. Malformed broker headers can bypass normal failure handling.
 
    NATS JetStream and RabbitMQ parse headers before the guarded processing path
    in important places. Bad `attempt` or retry-policy headers can leave messages
    unacked and repeatedly redelivered.
 
-5. NATS Core event handlers run without bounded backpressure.
+4. NATS Core event handlers run without bounded backpressure.
 
    Core subscriptions dispatch handler futures without tracking active work.
    Under load this can create unbounded in-flight processing, unhandled async
    errors, and shutdown that does not wait for active handlers.
 
-6. Kafka producer publish currently means "queued locally", not "delivered".
+5. Kafka producer publish currently means "queued locally", not "delivered".
 
    The native adapter does not expose per-message delivery reports. Broker-side
    delivery failures after local enqueue are not visible to callers.
+
+6. Kafka failed offsets stop the consumer loop.
+
+   The adapter no longer continues past a failed record without dead-letter
+   policy, which avoids committing a later offset over the failed record.
+   There is still no automatic retry topic, partition pause/resume, or recovery
+   strategy beyond surfacing the failed loop through health checks.
 
 7. `amqps://` RabbitMQ configuration does not yet prove TLS is active.
 
@@ -225,7 +225,7 @@ size, consumer-group parallelism, or commit cadence.
 
 ### Kafka
 
-- Fix per-partition commit ordering so failed offsets cannot be skipped.
+- Add an explicit recovery strategy for failed consumer loops.
 - Add delivery report handling or document an explicit fire-and-forget mode.
 - Add producer and consumer tuning for partitions, batching, linger, batch
   size, commit cadence, and consumer-group parallelism before drawing

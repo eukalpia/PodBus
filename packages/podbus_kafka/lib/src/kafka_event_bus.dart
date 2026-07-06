@@ -180,6 +180,36 @@ final class KafkaEventBus implements MessageBus, DurableJobQueue {
         message: 'Kafka adapter is not connected.',
       );
     }
+    for (final subscription in _subscriptions) {
+      final lastError = subscription.lastError;
+      if (lastError != null) {
+        return HealthCheckResult.unhealthy(
+          message: 'Kafka consumer loop failed.',
+          details: {
+            'consumerType': 'subscription',
+            'subject': subscription.subject,
+            'lastConsumerError': lastError.toString(),
+            if (subscription.lastStackTrace != null)
+              'lastConsumerStackTrace': subscription.lastStackTrace.toString(),
+          },
+        );
+      }
+    }
+    for (final worker in _workers) {
+      final lastError = worker.lastError;
+      if (lastError != null) {
+        return HealthCheckResult.unhealthy(
+          message: 'Kafka consumer loop failed.',
+          details: {
+            'consumerType': 'worker',
+            'topic': worker.topic,
+            'lastConsumerError': lastError.toString(),
+            if (worker.lastStackTrace != null)
+              'lastConsumerStackTrace': worker.lastStackTrace.toString(),
+          },
+        );
+      }
+    }
     try {
       await _adapter.flush(config.requestTimeout);
       return HealthCheckResult.healthy(
@@ -440,7 +470,7 @@ final class _KafkaSubscription implements Subscription {
       } on Object catch (error, stackTrace) {
         lastError = error;
         lastStackTrace = stackTrace;
-        await Future<void>.delayed(const Duration(milliseconds: 200));
+        break;
       }
     }
   }
@@ -491,7 +521,7 @@ final class _KafkaWorker implements Worker {
       } on Object catch (error, stackTrace) {
         lastError = error;
         lastStackTrace = stackTrace;
-        await Future<void>.delayed(const Duration(milliseconds: 200));
+        break;
       }
     }
   }

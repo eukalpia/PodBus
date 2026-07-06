@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 
 import 'package:podbus_core/podbus_core.dart';
@@ -90,6 +91,56 @@ void main() {
       await bus.close();
     });
 
+    test('stops an event consumer after a failed offset', () async {
+      final adapter = FakeKafkaAdapter();
+      final bus = KafkaEventBus(config: _config(), adapter: adapter);
+      await bus.connect();
+
+      final failed = Completer<void>();
+      final handled = <int>[];
+      final subscription = await bus.subscribe<Map<String, Object?>>(
+        'leads.created',
+        handler: (_, payload) async {
+          handled.add(payload['leadId'] as int);
+          if (payload['leadId'] == 1) {
+            failed.complete();
+            throw StateError('handler failed');
+          }
+        },
+      );
+
+      adapter.consumer.add(
+        KafkaAdapterRecord(
+          topic: 'leads.created',
+          bytes: _recordBytes({'leadId': 1}),
+          key: null,
+          partition: 0,
+          offset: 1,
+        ),
+      );
+      await failed.future.timeout(_testTimeout);
+
+      adapter.consumer.add(
+        KafkaAdapterRecord(
+          topic: 'leads.created',
+          bytes: _recordBytes({'leadId': 2}),
+          key: null,
+          partition: 0,
+          offset: 2,
+        ),
+      );
+
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(handled, [1]);
+      expect(adapter.consumer.commitCount, 0);
+      final health = await bus.healthCheck();
+      expect(health.status, HealthStatus.unhealthy);
+      expect(health.details['lastConsumerError'], contains('handler failed'));
+
+      await subscription.close();
+      await bus.close();
+    });
+
     test('dead-letters a failed job and commits the source offset', () async {
       final adapter = FakeKafkaAdapter();
       final bus = KafkaEventBus(config: _config(), adapter: adapter);
@@ -128,6 +179,62 @@ void main() {
       await worker.close();
       await bus.close();
     });
+
+    test(
+      'stops a worker after a failed offset without dead-letter policy',
+      () async {
+        final adapter = FakeKafkaAdapter();
+        final bus = KafkaEventBus(config: _config(), adapter: adapter);
+        await bus.connect();
+
+        final failed = Completer<void>();
+        final handled = <int>[];
+        final worker = await bus.worker<Map<String, Object?>>(
+          'jobs.email',
+          handler: (_, payload) async {
+            handled.add(payload['leadId'] as int);
+            if (payload['leadId'] == 1) {
+              failed.complete();
+              throw StateError('smtp unavailable');
+            }
+          },
+        );
+
+        adapter.consumer.add(
+          KafkaAdapterRecord(
+            topic: 'jobs.email',
+            bytes: _recordBytes({'leadId': 1}),
+            key: null,
+            partition: 0,
+            offset: 1,
+          ),
+        );
+        await failed.future.timeout(_testTimeout);
+
+        adapter.consumer.add(
+          KafkaAdapterRecord(
+            topic: 'jobs.email',
+            bytes: _recordBytes({'leadId': 2}),
+            key: null,
+            partition: 0,
+            offset: 2,
+          ),
+        );
+
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        expect(handled, [1]);
+        expect(adapter.consumer.commitCount, 0);
+        final health = await bus.healthCheck();
+        expect(health.status, HealthStatus.unhealthy);
+        expect(
+          health.details['lastConsumerError'],
+          contains('smtp unavailable'),
+        );
+
+        await worker.close();
+        await bus.close();
+      },
+    );
   });
 }
 
@@ -203,7 +310,8 @@ final class FakeKafkaAdapter implements KafkaAdapter {
 }
 
 final class FakeKafkaConsumer implements KafkaAdapterConsumer {
-  final _records = StreamController<KafkaAdapterRecord>.broadcast();
+  final _records = Queue<KafkaAdapterRecord>();
+  Completer<void>? _available;
   var topics = <String>[];
   var groupId = '';
   var commitCount = 0;
@@ -211,12 +319,12 @@ final class FakeKafkaConsumer implements KafkaAdapterConsumer {
 
   void add(KafkaAdapterRecord record) {
     _records.add(record);
+    _available?.complete();
+    _available = null;
   }
 
   @override
-  Future<void> close() async {
-    await _records.close();
-  }
+  Future<void> close() async {}
 
   @override
   Future<void> commit() async {
@@ -228,11 +336,19 @@ final class FakeKafkaConsumer implements KafkaAdapterConsumer {
 
   @override
   Future<KafkaAdapterRecord?> poll(Duration timeout) async {
+    if (_records.isNotEmpty) {
+      return _records.removeFirst();
+    }
+    final available = _available ??= Completer<void>();
     try {
-      return await _records.stream.first.timeout(timeout);
+      await available.future.timeout(timeout);
     } on TimeoutException {
       return null;
     }
+    if (_records.isEmpty) {
+      return null;
+    }
+    return _records.removeFirst();
   }
 }
 
