@@ -307,7 +307,7 @@ Future<StressResult> _runDurableMode(
       options,
       scenario,
       durable: true,
-      modeNote: 'persistent messages; publisher confirms not implemented',
+      modeNote: 'persistent messages; publisher confirms',
     ),
     'kafka' => _stressKafkaJobs(
       options,
@@ -480,8 +480,8 @@ Future<StressResult> _stressRabbitMqEvents(
       elapsed: elapsed,
       ackMode: 'manual',
       durability: durable ? 'persistent queue/message' : 'no',
-      publisherConfirms: 'no',
-      notes: durable ? 'confirms not implemented' : 'non-persistent fast path',
+      publisherConfirms: 'AMQP confirm',
+      notes: durable ? 'publisher confirms' : 'non-persistent fast path',
     );
   } finally {
     await bus.close(timeout: const Duration(seconds: 5));
@@ -655,7 +655,7 @@ Future<StressResult> _stressRabbitMqJobs(
       elapsed: elapsed,
       ackMode: 'manual',
       durability: durable ? 'persistent queue/message' : 'no',
-      publisherConfirms: 'no',
+      publisherConfirms: 'AMQP confirm',
       notes: modeNote,
     );
   } finally {
@@ -867,7 +867,7 @@ Future<StressResult> _stressRabbitMqDeadLetter(
       elapsed: elapsed,
       ackMode: 'manual',
       durability: 'persistent queue/message',
-      publisherConfirms: 'no',
+      publisherConfirms: 'AMQP confirm',
       notes: 'manual DLQ observed; broker-side DLX not proven',
     );
   } finally {

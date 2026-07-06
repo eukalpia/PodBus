@@ -40,6 +40,8 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
   final Duration _idempotencyTtl;
   final List<_RabbitMqSubscription> _subscriptions = [];
   final List<_RabbitMqWorker<Object?>> _workers = [];
+  Object? _lastWorkerError;
+  DateTime? _lastWorkerErrorAt;
   var _connected = false;
 
   @override
@@ -209,6 +211,19 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
         message: 'RabbitMQ adapter is not connected.',
       );
     }
+    final lastWorkerError = _lastWorkerError;
+    if (lastWorkerError != null) {
+      return HealthCheckResult.unhealthy(
+        message: 'RabbitMQ worker failure handling failed.',
+        details: {
+          'lastWorkerError': lastWorkerError.toString(),
+          if (_lastWorkerErrorAt != null)
+            'lastWorkerErrorAt': _lastWorkerErrorAt!.toIso8601String(),
+          'subscriptions': _subscriptions.length,
+          'workers': _workers.length,
+        },
+      );
+    }
     return HealthCheckResult.healthy(
       message: 'RabbitMQ adapter is connected.',
       details: {
@@ -216,6 +231,11 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
         'workers': _workers.length,
       },
     );
+  }
+
+  void _recordWorkerError(Object error) {
+    _lastWorkerError = error;
+    _lastWorkerErrorAt = DateTime.now();
   }
 
   Future<void> _handleEventDelivery<T>(
@@ -589,15 +609,19 @@ final class _RabbitMqWorker<T> implements Worker {
         await context.ack();
       }
     } on Object catch (error, stackTrace) {
-      await bus._handleJobFailure(
-        this as _RabbitMqWorker<Object?>,
-        delivery,
-        headers,
-        headers.attempt,
-        retryPolicy,
-        error,
-        stackTrace,
-      );
+      try {
+        await bus._handleJobFailure(
+          this as _RabbitMqWorker<Object?>,
+          delivery,
+          headers,
+          headers.attempt,
+          retryPolicy,
+          error,
+          stackTrace,
+        );
+      } on Object catch (failureError) {
+        bus._recordWorkerError(failureError);
+      }
     } finally {
       _active -= 1;
       _drain();

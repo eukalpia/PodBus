@@ -23,6 +23,16 @@ void main() {
         ),
         throwsA(isA<MessagingConfigurationException>()),
       );
+
+      expect(
+        () => RabbitMqMessagingConfig(
+          uri: Uri.parse('amqp://localhost:5672'),
+          exchange: 'podbus',
+          deadLetterExchange: 'podbus.dead',
+          publisherConfirmTimeout: Duration.zero,
+        ),
+        throwsA(isA<MessagingConfigurationException>()),
+      );
     });
   });
 }

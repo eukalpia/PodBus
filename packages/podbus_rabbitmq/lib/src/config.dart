@@ -8,6 +8,7 @@ final class RabbitMqMessagingConfig {
     this.durable = true,
     this.prefetchCount = 10,
     this.connectTimeout = const Duration(seconds: 5),
+    this.publisherConfirmTimeout = const Duration(seconds: 5),
   }) {
     if (exchange.trim().isEmpty) {
       throw const MessagingConfigurationException(
@@ -24,6 +25,11 @@ final class RabbitMqMessagingConfig {
         'RabbitMQ prefetchCount must be greater than zero.',
       );
     }
+    if (publisherConfirmTimeout <= Duration.zero) {
+      throw const MessagingConfigurationException(
+        'RabbitMQ publisherConfirmTimeout must be greater than zero.',
+      );
+    }
   }
 
   final Uri uri;
@@ -32,4 +38,5 @@ final class RabbitMqMessagingConfig {
   final bool durable;
   final int prefetchCount;
   final Duration connectTimeout;
+  final Duration publisherConfirmTimeout;
 }

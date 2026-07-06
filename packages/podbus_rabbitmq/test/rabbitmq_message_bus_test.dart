@@ -141,10 +141,66 @@ void main() {
         await bus.close();
       },
     );
+
+    test(
+      'does not ack failed jobs when dead-letter publishing fails',
+      () async {
+        final adapter = FakeRabbitMqAdapter()
+          ..publishError = StateError('broker rejected publish');
+        final bus = RabbitMqMessageBus(config: _config(), adapter: adapter);
+        await bus.connect();
+
+        final worker = await bus.worker<Map<String, Object?>>(
+          'jobs.email',
+          retryPolicy: RetryPolicy(
+            maxAttempts: 1,
+            initialDelay: Duration.zero,
+            maxDelay: Duration.zero,
+          ),
+          deadLetterPolicy: const DeadLetterPolicy(
+            enabled: true,
+            destination: 'jobs.email.dead',
+          ),
+          handler: (_, _) async {
+            throw StateError('smtp unavailable');
+          },
+        );
+
+        final delivery = FakeRabbitMqDelivery(
+          routingKey: 'jobs.email',
+          bytes: '{"leadId":7}'.codeUnits,
+          headers: _jsonHeaders(),
+        );
+        adapter.consumers.single.add(delivery);
+
+        await _waitFor(() => adapter.publishAttempts == 1);
+        expect(delivery.isAcked, isFalse);
+        expect(delivery.isNacked, isFalse);
+        final health = await bus.healthCheck();
+        expect(health.status, HealthStatus.unhealthy);
+        expect(
+          health.details['lastWorkerError'],
+          contains('broker rejected publish'),
+        );
+
+        await worker.close();
+        await bus.close();
+      },
+    );
   });
 }
 
 const _testTimeout = Duration(seconds: 2);
+
+Future<void> _waitFor(bool Function() condition) async {
+  final deadline = DateTime.now().add(_testTimeout);
+  while (!condition()) {
+    if (DateTime.now().isAfter(deadline)) {
+      throw TimeoutException('Condition was not met.', _testTimeout);
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+  }
+}
 
 RabbitMqMessagingConfig _config() {
   return RabbitMqMessagingConfig(
@@ -169,6 +225,8 @@ final class FakeRabbitMqAdapter implements RabbitMqAdapter {
   final prefetchCounts = <int>[];
   final consumers = <FakeRabbitMqConsumer>[];
   final published = <FakeRabbitMqPublish>[];
+  Object? publishError;
+  var publishAttempts = 0;
   var connected = false;
 
   @override
@@ -228,6 +286,11 @@ final class FakeRabbitMqAdapter implements RabbitMqAdapter {
     required Map<String, String> headers,
     required bool persistent,
   }) async {
+    publishAttempts += 1;
+    final error = publishError;
+    if (error != null) {
+      throw error;
+    }
     published.add(
       FakeRabbitMqPublish(exchange, routingKey, bytes, headers, persistent),
     );
@@ -277,6 +340,10 @@ final class FakeRabbitMqDelivery implements RabbitMqDelivery {
 
   final acked = Completer<void>();
   final nacked = Completer<bool>();
+
+  bool get isAcked => acked.isCompleted;
+
+  bool get isNacked => nacked.isCompleted;
 
   @override
   Future<void> ack() async {

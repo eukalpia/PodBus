@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:dart_amqp/dart_amqp.dart' as amqp;
+import 'package:podbus_core/podbus_core.dart';
 
 import 'config.dart';
 
@@ -67,8 +68,12 @@ final class DartRabbitMqAdapter implements RabbitMqAdapter {
 
   amqp.Client? _client;
   amqp.Channel? _channel;
+  StreamSubscription<amqp.PublishNotification>? _publishNotifications;
   final Map<String, amqp.Exchange> _exchanges = {};
   final Map<String, amqp.Queue> _queues = {};
+  final Map<String, Completer<void>> _pendingPublishes = {};
+  var _publisherConfirmTimeout = const Duration(seconds: 5);
+  var _publishSequence = 0;
   var _connected = false;
 
   @override
@@ -92,6 +97,13 @@ final class DartRabbitMqAdapter implements RabbitMqAdapter {
   @override
   Future<void> close() async {
     _connected = false;
+    _failPendingPublishes(
+      const MessagingConnectionException(
+        'RabbitMQ adapter closed before publisher confirmation.',
+      ),
+    );
+    await _publishNotifications?.cancel();
+    _publishNotifications = null;
     await _channel?.close();
     await _client?.close();
     _channel = null;
@@ -118,6 +130,20 @@ final class DartRabbitMqAdapter implements RabbitMqAdapter {
     await client.connect();
     _client = client;
     _channel = await client.channel();
+    _publisherConfirmTimeout = config.publisherConfirmTimeout;
+    await _channel!.confirmPublishedMessages();
+    _publishNotifications = _channel!.publishNotifier(
+      _handlePublishNotification,
+      onError: (Object error, StackTrace stackTrace) {
+        _failPendingPublishes(
+          MessagingConnectionException(
+            'RabbitMQ publisher confirmation stream failed.',
+            cause: error,
+            stackTrace: stackTrace,
+          ),
+        );
+      },
+    );
     _connected = true;
   }
 
@@ -175,16 +201,40 @@ final class DartRabbitMqAdapter implements RabbitMqAdapter {
     final exchangeRef =
         _exchanges[exchange] ??
         await _ch.exchange(exchange, amqp.ExchangeType.TOPIC, declare: false);
+    final publishId = _nextPublishId();
+    final published = Completer<void>();
+    _pendingPublishes[publishId] = published;
     final properties = amqp.MessageProperties()
       ..headers = headers
+      ..corellationId = publishId
       ..persistent = persistent
       ..contentType = headers['podbus-content-type'];
-    exchangeRef.publish(
-      Uint8List.fromList(bytes),
-      routingKey,
-      properties: properties,
-    );
-    _exchanges[exchange] = exchangeRef;
+    try {
+      exchangeRef.publish(
+        Uint8List.fromList(bytes),
+        routingKey,
+        properties: properties,
+      );
+      _exchanges[exchange] = exchangeRef;
+      await published.future.timeout(
+        _publisherConfirmTimeout,
+        onTimeout: () {
+          _pendingPublishes.remove(publishId);
+          throw MessagingTimeoutException(
+            'Timed out waiting for RabbitMQ publisher confirmation.',
+          );
+        },
+      );
+    } on MessagingException {
+      rethrow;
+    } on Object catch (error, stackTrace) {
+      _pendingPublishes.remove(publishId);
+      throw MessagingConnectionException(
+        'Failed to publish RabbitMQ message.',
+        cause: error,
+        stackTrace: stackTrace,
+      );
+    }
   }
 
   @override
@@ -198,6 +248,42 @@ final class DartRabbitMqAdapter implements RabbitMqAdapter {
       throw StateError('RabbitMQ adapter is not connected.');
     }
     return channel;
+  }
+
+  String _nextPublishId() {
+    _publishSequence += 1;
+    return 'podbus-${DateTime.now().microsecondsSinceEpoch}-$_publishSequence';
+  }
+
+  void _handlePublishNotification(amqp.PublishNotification notification) {
+    final publishId = notification.properties?.corellationId;
+    if (publishId == null) {
+      return;
+    }
+    final published = _pendingPublishes.remove(publishId);
+    if (published == null || published.isCompleted) {
+      return;
+    }
+    if (notification.published) {
+      published.complete();
+      return;
+    }
+    published.completeError(
+      MessagingConnectionException(
+        'RabbitMQ publisher confirmation was nacked by the broker.',
+        cause: notification.message,
+      ),
+    );
+  }
+
+  void _failPendingPublishes(MessagingException error) {
+    final pending = List<Completer<void>>.of(_pendingPublishes.values);
+    _pendingPublishes.clear();
+    for (final published in pending) {
+      if (!published.isCompleted) {
+        published.completeError(error);
+      }
+    }
   }
 }
 

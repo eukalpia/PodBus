@@ -61,7 +61,7 @@ Results:
 | fast | RabbitMQ | 100000 / 100000 | 12254 ms | 8160.2 msg/s | Non-persistent fast path |
 | fast | Kafka | 100000 / 100000 | 16239 ms | 6157.7 msg/s | Untuned single-topic event log |
 | durable | NATS JetStream | 100000 / 100000 | 12005 ms | 8329.2 msg/s | File storage and explicit ack |
-| durable | RabbitMQ | 100000 / 100000 | 10911 ms | 9164.5 msg/s | Persistent messages; publisher confirms not implemented |
+| durable | RabbitMQ | 100000 / 100000 | 10911 ms | 9164.5 msg/s | Persistent messages; no publisher confirms at time of run |
 | durable | Kafka | 100000 / 100000 | 13433 ms | 7444.1 msg/s | Manual offset commit; acks and partitions not configurable |
 | worker | NATS JetStream | 100000 / 100000 | 11941 ms | 8373.9 msg/s | Manual ack worker |
 | worker | RabbitMQ | 100000 / 100000 | 10914 ms | 9162.5 msg/s | Manual ack worker; delayed retry uses client-side sleep |
@@ -71,6 +71,9 @@ NATS Core is skipped in durable and worker modes because it has no broker-side
 durable replay or queue semantics. JetStream is skipped in fast mode because it
 is the durable NATS path. Failure mode was covered separately with a smaller
 run; Kafka failure mode remains skipped for the correctness reasons above.
+RabbitMQ publisher confirms were added after this matrix was captured, so the
+RabbitMQ durable and worker numbers should be rerun before using them for
+throughput comparison.
 
 ## Historical Stress Smoke Results
 
@@ -147,12 +150,11 @@ size, consumer-group parallelism, or commit cadence.
    failed offset can be skipped. This breaks the documented "failed handler does
    not commit" behavior and is the first Kafka correctness issue to fix.
 
-2. RabbitMQ retry and dead-letter republish are not confirmed before acking the
-   source delivery.
+2. RabbitMQ unroutable retry and dead-letter publishes are not detected.
 
-   The adapter publishes retry or dead-letter messages and then acknowledges the
-   original delivery, but it does not use publisher confirms or mandatory-return
-   handling. A broker-side publish failure can become data loss.
+   Publisher confirms are now used before the original delivery is acked, but
+   mandatory-return handling is still missing. A publish accepted by the broker
+   can still be unroutable if topology is wrong.
 
 3. NATS JetStream idempotency is claimed before publish is confirmed.
 
@@ -208,8 +210,9 @@ size, consumer-group parallelism, or commit cadence.
 ### RabbitMQ
 
 - Add explicit TLS support for `amqps://`.
-- Add publisher confirms and mandatory-return handling.
-- Ack original deliveries only after retry or dead-letter publish is confirmed.
+- Add mandatory-return handling for unroutable publishes.
+- Add Docker-backed tests proving retry and dead-letter publishes are confirmed
+  before source delivery ack.
 - Move header decoding into guarded processing and handle malformed messages.
 - Replace delayed retry sleeps with TTL retry queues or the delayed-message
   plugin.
@@ -217,7 +220,7 @@ size, consumer-group parallelism, or commit cadence.
 - Fix queue naming collisions by using reversible encoding or a hash suffix.
 - Define one dead-letter exchange and routing-key contract.
 - Track connection/channel close events and rebuild topology on reconnect.
-- Add integration tests for broker-side DLX, confirms, queue cleanup,
+- Add integration tests for broker-side DLX, queue cleanup,
   reconnection, malformed headers, and prefetch versus concurrency.
 
 ### Kafka
