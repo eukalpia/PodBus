@@ -62,6 +62,35 @@ void main() {
       await bus.close();
     });
 
+    test('nacks events with malformed attempt headers', () async {
+      final adapter = FakeRabbitMqAdapter();
+      final bus = RabbitMqMessageBus(config: _config(), adapter: adapter);
+      await bus.connect();
+
+      var handled = false;
+      final subscription = await bus.subscribe<Map<String, Object?>>(
+        'leads.created',
+        queueGroup: 'lead-workers',
+        handler: (_, _) async {
+          handled = true;
+        },
+      );
+
+      final delivery = FakeRabbitMqDelivery(
+        routingKey: 'leads.created',
+        bytes: '{"leadId":7}'.codeUnits,
+        headers: {..._jsonHeaders(), 'attempt': 'not-an-int'},
+      );
+      adapter.consumers.single.add(delivery);
+
+      expect(await delivery.nacked.future.timeout(_testTimeout), isFalse);
+      expect(handled, isFalse);
+      expect(delivery.isAcked, isFalse);
+
+      await subscription.close();
+      await bus.close();
+    });
+
     test(
       'retries failed jobs by republishing with incremented attempt',
       () async {
@@ -187,6 +216,44 @@ void main() {
         await bus.close();
       },
     );
+
+    test('dead-letters jobs with malformed attempt headers', () async {
+      final adapter = FakeRabbitMqAdapter();
+      final bus = RabbitMqMessageBus(config: _config(), adapter: adapter);
+      await bus.connect();
+
+      var handled = false;
+      final worker = await bus.worker<Map<String, Object?>>(
+        'jobs.email',
+        deadLetterPolicy: const DeadLetterPolicy(
+          enabled: true,
+          destination: 'jobs.email.dead',
+          includeErrorDetails: true,
+        ),
+        handler: (_, _) async {
+          handled = true;
+        },
+      );
+
+      final delivery = FakeRabbitMqDelivery(
+        routingKey: 'jobs.email',
+        bytes: '{"leadId":7}'.codeUnits,
+        headers: {..._jsonHeaders(), 'attempt': 'not-an-int'},
+      );
+      adapter.consumers.single.add(delivery);
+
+      await delivery.acked.future.timeout(_testTimeout);
+      expect(handled, isFalse);
+      expect(adapter.published.single.exchange, 'podbus.dead');
+      expect(adapter.published.single.routingKey, 'jobs.email.dead');
+      expect(
+        adapter.published.single.headers['podbus-dead-letter-error'],
+        contains('not-an-int'),
+      );
+
+      await worker.close();
+      await bus.close();
+    });
   });
 }
 

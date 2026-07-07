@@ -243,21 +243,21 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
     RabbitMqDelivery delivery,
     MessageHandler<T> handler,
   ) async {
-    final context = _RabbitMqMessageContext(
-      subject: subject,
-      headers: MessageHeaders.fromMap(delivery.headers),
-      rawMessage: delivery,
-      delivery: delivery,
-    );
-
+    _RabbitMqMessageContext? context;
     try {
+      context = _RabbitMqMessageContext(
+        subject: subject,
+        headers: MessageHeaders.fromMap(delivery.headers),
+        rawMessage: delivery,
+        delivery: delivery,
+      );
       final payload = await _decode<T>(delivery);
       await handler(context, payload);
       if (!context.completed) {
         await context.ack();
       }
     } on Object {
-      if (!context.completed) {
+      if (context?.completed != true) {
         await delivery.nack(requeue: false);
       }
     }
@@ -305,6 +305,27 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
         worker,
         delivery,
         headers.copyWith(attempt: attempt),
+        error: error,
+        stackTrace: stackTrace,
+      );
+      await delivery.ack();
+      return;
+    }
+
+    await delivery.nack(requeue: false);
+  }
+
+  Future<void> _handleMalformedJob(
+    _RabbitMqWorker<Object?> worker,
+    RabbitMqDelivery delivery,
+    Object error,
+    StackTrace stackTrace,
+  ) async {
+    if (worker.deadLetterPolicy.enabled) {
+      await _publishDeadLetter(
+        worker,
+        delivery,
+        MessageHeaders(),
         error: error,
         stackTrace: stackTrace,
       );
@@ -586,23 +607,24 @@ final class _RabbitMqWorker<T> implements Worker {
   }
 
   Future<void> _process(RabbitMqDelivery delivery) async {
-    final headers = MessageHeaders.fromMap(delivery.headers);
-    final retryPolicy = bus._retryPolicyFor(
-      this as _RabbitMqWorker<Object?>,
-      headers,
-    );
-    final context = _RabbitMqJobContext(
-      topic: topic,
-      headers: headers,
-      rawMessage: delivery,
-      attempt: headers.attempt,
-      maxAttempts: retryPolicy.maxAttempts,
-      delivery: delivery,
-      bus: bus,
-      worker: this as _RabbitMqWorker<Object?>,
-    );
-
+    MessageHeaders? headers;
+    RetryPolicy? effectiveRetryPolicy;
     try {
+      headers = MessageHeaders.fromMap(delivery.headers);
+      effectiveRetryPolicy = bus._retryPolicyFor(
+        this as _RabbitMqWorker<Object?>,
+        headers,
+      );
+      final context = _RabbitMqJobContext(
+        topic: topic,
+        headers: headers,
+        rawMessage: delivery,
+        attempt: headers.attempt,
+        maxAttempts: effectiveRetryPolicy.maxAttempts,
+        delivery: delivery,
+        bus: bus,
+        worker: this as _RabbitMqWorker<Object?>,
+      );
       final payload = await bus._decode<T>(delivery);
       await handler(context, payload);
       if (!context.completed) {
@@ -610,15 +632,26 @@ final class _RabbitMqWorker<T> implements Worker {
       }
     } on Object catch (error, stackTrace) {
       try {
-        await bus._handleJobFailure(
-          this as _RabbitMqWorker<Object?>,
-          delivery,
-          headers,
-          headers.attempt,
-          retryPolicy,
-          error,
-          stackTrace,
-        );
+        final parsedHeaders = headers;
+        final parsedRetryPolicy = effectiveRetryPolicy;
+        if (parsedHeaders == null || parsedRetryPolicy == null) {
+          await bus._handleMalformedJob(
+            this as _RabbitMqWorker<Object?>,
+            delivery,
+            error,
+            stackTrace,
+          );
+        } else {
+          await bus._handleJobFailure(
+            this as _RabbitMqWorker<Object?>,
+            delivery,
+            parsedHeaders,
+            parsedHeaders.attempt,
+            parsedRetryPolicy,
+            error,
+            stackTrace,
+          );
+        }
       } on Object catch (failureError) {
         bus._recordWorkerError(failureError);
       }

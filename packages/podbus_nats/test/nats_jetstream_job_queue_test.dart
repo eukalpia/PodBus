@@ -152,6 +152,47 @@ void main() {
       },
     );
 
+    test('dead-letters jobs with malformed attempt headers', () async {
+      final adapter = FakeNatsJetStreamAdapter();
+      final queue = NatsJetStreamJobQueue(
+        config: _config(),
+        jetStreamAdapter: adapter,
+      );
+      await queue.connect();
+
+      var handled = false;
+      final worker = await queue.worker<Map<String, Object?>>(
+        'jobs.email',
+        durableName: 'email-workers',
+        deadLetterPolicy: const DeadLetterPolicy(
+          enabled: true,
+          destination: 'jobs.email.dead',
+          includeErrorDetails: true,
+        ),
+        handler: (_, _) async {
+          handled = true;
+        },
+      );
+
+      final message = FakeNatsJetStreamMessage(
+        subject: 'jobs.email',
+        bytes: '{"leadId":7}'.codeUnits,
+        headers: {..._jsonHeaders(), 'attempt': 'not-an-int'},
+      );
+      adapter.consumers.single.add(message);
+
+      await message.termed.future.timeout(_testTimeout);
+      expect(handled, isFalse);
+      expect(adapter.published.single.subject, 'jobs.email.dead');
+      expect(
+        adapter.published.single.headers['podbus-dead-letter-error'],
+        contains('not-an-int'),
+      );
+
+      await worker.close();
+      await queue.close();
+    });
+
     test('fetches JetStream jobs in configured batches', () async {
       final adapter = FakeNatsJetStreamAdapter();
       final queue = NatsJetStreamJobQueue(

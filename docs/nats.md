@@ -21,6 +21,8 @@ JetStream:
 - explicit JetStream ack/nak
 - JetStream-backed durable jobs
 - JetStream dead-letter subjects
+- malformed JetStream job headers are treated as poison messages and terminated
+  after optional dead-letter publish
 
 Current limitations:
 

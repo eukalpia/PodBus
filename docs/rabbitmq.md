@@ -42,6 +42,11 @@ dead-letter message before acknowledging the original delivery. If that republis
 fails or times out, the original delivery is left unacked and the health check
 records the failure.
 
+Malformed event headers are rejected with `nack(requeue: false)`. Malformed job
+headers are treated as poison messages: with a dead-letter policy they are
+republished to the configured dead-letter route before the source delivery is
+acked; without a dead-letter policy they are rejected without requeue.
+
 Delayed retry is still implemented with client-side delay before republish. A
 production RabbitMQ retry strategy should use TTL retry queues or the delayed
 message plugin, depending on deployment constraints.

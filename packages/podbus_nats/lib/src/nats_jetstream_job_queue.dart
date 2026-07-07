@@ -268,6 +268,22 @@ final class NatsJetStreamJobQueue implements DurableJobQueue {
     await _ensureAckAction(message.term(), 'term');
   }
 
+  Future<void> _handleMalformedMessage(
+    _NatsJetStreamWorker<Object?> worker,
+    NatsJetStreamMessage message,
+    Object error,
+    StackTrace stackTrace,
+  ) async {
+    await _publishDeadLetter(
+      worker,
+      message,
+      MessageHeaders(),
+      error: error,
+      stackTrace: stackTrace,
+    );
+    await _ensureAckAction(message.term(), 'term');
+  }
+
   MessageHeaders _headersFromMessage(NatsJetStreamMessage message) {
     final headers = MessageHeaders.fromMap(message.headers);
     return headers.copyWith(
@@ -469,39 +485,55 @@ final class _NatsJetStreamWorker<T> implements Worker {
   }
 
   Future<void> _process(NatsJetStreamMessage message) async {
-    final headers = queue._headersFromMessage(message);
-    final retryPolicy = queue._retryPolicyFor(
-      this as _NatsJetStreamWorker<Object?>,
-      headers,
-    );
-    final attempt = math.max(headers.attempt, message.deliveryCount);
-    final context = _NatsJetStreamJobContext(
-      topic: topic,
-      headers: headers.copyWith(attempt: attempt),
-      rawMessage: message,
-      attempt: attempt,
-      maxAttempts: retryPolicy.maxAttempts,
-      message: message,
-      queue: queue,
-      worker: this as _NatsJetStreamWorker<Object?>,
-    );
-
+    MessageHeaders? headers;
+    RetryPolicy? effectiveRetryPolicy;
+    int? attempt;
     try {
+      headers = queue._headersFromMessage(message);
+      effectiveRetryPolicy = queue._retryPolicyFor(
+        this as _NatsJetStreamWorker<Object?>,
+        headers,
+      );
+      attempt = math.max(headers.attempt, message.deliveryCount);
+      final context = _NatsJetStreamJobContext(
+        topic: topic,
+        headers: headers.copyWith(attempt: attempt),
+        rawMessage: message,
+        attempt: attempt,
+        maxAttempts: effectiveRetryPolicy.maxAttempts,
+        message: message,
+        queue: queue,
+        worker: this as _NatsJetStreamWorker<Object?>,
+      );
       final payload = await queue._decode<T>(message);
       await handler(context, payload);
       if (!context.completed) {
         await context.ack();
       }
     } on Object catch (error, stackTrace) {
-      await queue._handleFailure(
-        this as _NatsJetStreamWorker<Object?>,
-        message,
-        headers,
-        attempt,
-        retryPolicy,
-        error,
-        stackTrace,
-      );
+      final parsedHeaders = headers;
+      final parsedRetryPolicy = effectiveRetryPolicy;
+      final parsedAttempt = attempt;
+      if (parsedHeaders == null ||
+          parsedRetryPolicy == null ||
+          parsedAttempt == null) {
+        await queue._handleMalformedMessage(
+          this as _NatsJetStreamWorker<Object?>,
+          message,
+          error,
+          stackTrace,
+        );
+      } else {
+        await queue._handleFailure(
+          this as _NatsJetStreamWorker<Object?>,
+          message,
+          parsedHeaders,
+          parsedAttempt,
+          parsedRetryPolicy,
+          error,
+          stackTrace,
+        );
+      }
     }
   }
 
