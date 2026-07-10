@@ -1,0 +1,31 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: 3.12.0
+      - name: Resolve dependencies
+        run: dart pub get
+      - name: Verify source
+        run: |
+          dart format --output=none --set-exit-if-changed .
+          dart analyze .
+          dart test packages/podbus_core/test packages/podbus_nats/test packages/podbus_rabbitmq/test packages/podbus_kafka/test packages/podbus_serverpod/test --exclude-tags=integration
+      - name: Build source archive
+        run: git archive --format=tar.gz --prefix=PodBus-${GITHUB_REF_NAME}/ -o PodBus-${GITHUB_REF_NAME}.tar.gz HEAD
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: PodBus-${{ github.ref_name }}.tar.gz

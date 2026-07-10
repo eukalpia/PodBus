@@ -45,6 +45,31 @@ void main() {
       expect(decoded, LeadPayload(leadId: 42, email: 'a@b.test'));
     });
 
+    test('round-trips registered typed payloads with wire metadata', () async {
+      final registry = MessageCodecRegistry()
+        ..register<LeadPayload>(
+          messageType: 'lead.created',
+          schemaVersion: 2,
+          encode: (value) => {
+            'leadId': value.leadId,
+            'email': value.email,
+          },
+          decode: (json, schemaVersion) {
+            expect(schemaVersion, 2);
+            return LeadPayload.fromJson(json);
+          },
+        );
+      final codec = JsonMessageCodec(registry: registry);
+      const payload = LeadPayload(leadId: 42, email: 'a@b.test');
+
+      final encoded = await codec.encode(payload);
+      final decoded = await codec.decode<LeadPayload>(encoded);
+
+      expect(encoded.messageType, 'lead.created');
+      expect(encoded.schemaVersion, 2);
+      expect(decoded, payload);
+    });
+
     test('throws a codec exception for unsupported payloads', () async {
       final codec = JsonMessageCodec();
 

@@ -11,3 +11,6 @@ export 'src/message_bus.dart';
 export 'src/message_context.dart';
 export 'src/message_envelope.dart';
 export 'src/policies.dart';
+export 'src/capabilities.dart';
+export 'src/failure.dart';
+export 'src/wire_protocol.dart';

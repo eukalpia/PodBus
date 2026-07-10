@@ -1,3 +1,4 @@
+import 'capabilities.dart';
 import 'headers.dart';
 import 'health.dart';
 import 'message_context.dart';
@@ -5,7 +6,7 @@ import 'message_context.dart';
 typedef MessageHandler<T> =
     Future<void> Function(MessageContext context, T payload);
 
-abstract interface class MessageBus {
+abstract interface class MessageBus implements MessagingCapabilityProvider {
   Future<void> connect();
 
   Future<void> close({Duration? timeout});
@@ -15,6 +16,7 @@ abstract interface class MessageBus {
   Future<Subscription> subscribe<T>(
     String subject, {
     String? queueGroup,
+    int concurrency = 1,
     required MessageHandler<T> handler,
   });
 

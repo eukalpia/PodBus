@@ -1,0 +1,23 @@
+name: Feature request
+description: Propose a transport capability or API improvement
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the use case and why current behavior is insufficient.
+    validations:
+      required: true
+  - type: textarea
+    id: semantics
+    attributes:
+      label: Required delivery semantics
+      description: Explain acknowledgement, retry, ordering, idempotency, and failure expectations.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed API or behavior

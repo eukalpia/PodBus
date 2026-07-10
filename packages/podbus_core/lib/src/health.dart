@@ -21,6 +21,19 @@ final class HealthCheckResult {
     );
   }
 
+  factory HealthCheckResult.degraded({
+    String? message,
+    Map<String, Object?> details = const {},
+    DateTime? checkedAt,
+  }) {
+    return HealthCheckResult(
+      status: HealthStatus.degraded,
+      checkedAt: checkedAt ?? DateTime.now(),
+      message: message,
+      details: details,
+    );
+  }
+
   factory HealthCheckResult.unhealthy({
     String? message,
     Map<String, Object?> details = const {},

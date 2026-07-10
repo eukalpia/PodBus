@@ -15,6 +15,20 @@ void main() {
       },
     );
 
+    test('rejects outbound messages above configured limits', () {
+      final config = MessagingConfig(
+        limits: const MessagingLimits(
+          maxPayloadBytes: 4,
+          maxHeaderBytes: 32,
+        ),
+      );
+
+      expect(
+        () => config.validateRawOutbound(List<int>.filled(5, 0), const {}),
+        throwsA(isA<MessagingConfigurationException>()),
+      );
+    });
+
     test('passes structured log and metric events to optional hooks', () {
       final logs = <MessagingLogEvent>[];
       final metrics = <MessagingMetricEvent>[];

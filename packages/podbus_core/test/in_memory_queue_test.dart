@@ -85,6 +85,7 @@ void main() {
           enabled: true,
           destination: 'email.dead',
           includeErrorDetails: true,
+          includeOriginalPayload: true,
         ),
         handler: (_, _) async {
           throw StateError('smtp unavailable');

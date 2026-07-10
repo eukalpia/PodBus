@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Format and analyze
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: 3.12.0
+      - name: Resolve dependencies
+        run: dart pub get
+      - name: Check formatting
+        run: dart format --output=none --set-exit-if-changed .
+      - name: Analyze
+        run: dart analyze .
+
+  unit-tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: 3.12.0
+      - name: Resolve dependencies
+        run: dart pub get
+      - name: Run unit tests
+        run: >-
+          dart test
+          packages/podbus_core/test
+          packages/podbus_nats/test
+          packages/podbus_rabbitmq/test
+          packages/podbus_kafka/test
+          packages/podbus_serverpod/test
+          --exclude-tags=integration
+
+  integration-tests:
+    name: Broker integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: 3.12.0
+      - name: Install librdkafka
+        run: sudo apt-get update && sudo apt-get install -y librdkafka-dev
+      - name: Resolve dependencies
+        run: dart pub get
+      - name: Start brokers
+        run: docker compose -f docker-compose.integration.yaml up -d --wait nats rabbitmq kafka
+      - name: Run broker integration tests
+        env:
+          PODBUS_RUN_INTEGRATION_TESTS: "true"
+        run: >-
+          dart test
+          packages/podbus_nats/test
+          packages/podbus_rabbitmq/test
+          packages/podbus_kafka/test
+      - name: Print broker logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.integration.yaml logs --no-color
+      - name: Stop brokers
+        if: always()
+        run: docker compose -f docker-compose.integration.yaml down -v

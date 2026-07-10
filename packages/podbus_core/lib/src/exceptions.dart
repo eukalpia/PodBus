@@ -44,3 +44,19 @@ final class MessagingUnsupportedException extends MessagingException {
     super.stackTrace,
   });
 }
+
+final class MessagingAuthenticationException extends MessagingException {
+  const MessagingAuthenticationException(
+    super.message, {
+    super.cause,
+    super.stackTrace,
+  });
+}
+
+final class MessagingRateLimitException extends MessagingException {
+  const MessagingRateLimitException(
+    super.message, {
+    super.cause,
+    super.stackTrace,
+  });
+}
