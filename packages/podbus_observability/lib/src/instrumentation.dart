@@ -225,7 +225,7 @@ final class InstrumentedMessageBus implements MessageBus {
           attributes: {
             'transport': transport,
             'subject': subject,
-            if (queueGroup != null) 'queueGroup': queueGroup,
+            'queueGroup': ?queueGroup,
           },
         );
         try {
@@ -324,8 +324,8 @@ final class InstrumentedDurableJobQueue implements DurableJobQueue {
             'topic': topic,
             'attempt': context.attempt,
             'maxAttempts': context.maxAttempts,
-            if (queueGroup != null) 'queueGroup': queueGroup,
-            if (durableName != null) 'durableName': durableName,
+            'queueGroup': ?queueGroup,
+            'durableName': ?durableName,
           },
         );
         try {

@@ -355,7 +355,7 @@ final class FakeBasicReturnMessage implements amqp.BasicReturnMessage {
   final Uint8List? payload = null;
 
   @override
-  final Map? payloadAsJson = null;
+  final Map<Object?, Object?>? payloadAsJson = null;
 
   @override
   final String? payloadAsString = null;

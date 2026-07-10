@@ -1,5 +1,3 @@
-import 'dart:collection';
-
 import 'package:podbus_core/podbus_core.dart';
 
 enum PrometheusMetricKind { counter, gauge, summary }
@@ -32,7 +30,7 @@ final class PrometheusRegistry {
   final int maxSeries;
   final Set<String> allowedLabelKeys;
   final PrometheusMetricKind Function(MessagingMetricEvent event) _classify;
-  final Map<_SeriesKey, _MetricValue> _series = LinkedHashMap();
+  final Map<_SeriesKey, _MetricValue> _series = {};
   var _droppedSeries = 0;
 
   int get seriesCount => _series.length;

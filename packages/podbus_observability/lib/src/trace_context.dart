@@ -44,7 +44,7 @@ final class W3cTraceContext {
       custom: {
         ...headers.custom,
         traceParentHeader: traceParent,
-        if (traceState != null) traceStateHeader: traceState!,
+        traceStateHeader: ?traceState,
       },
     );
   }
