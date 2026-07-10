@@ -18,7 +18,7 @@ services:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
     tmpfs:
-      - /var/lib/rabbitmq:uid=999,gid=999,mode=0770
+      - /var/lib/rabbitmq:uid=100,gid=101,mode=0770
     ports:
       - "5672:5672"
       - "15672:15672"
