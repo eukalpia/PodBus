@@ -10,7 +10,7 @@ void main() {
   group(
     'PostgreSQL reliability integration',
     () {
-      late Pool pool;
+      late Pool<void> pool;
       late PostgresMessagingSchema schema;
 
       setUp(() async {
