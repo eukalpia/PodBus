@@ -56,7 +56,9 @@ void main(List<String> arguments) {
   }
 
   if (hitsBySource.isEmpty) {
-    stderr.writeln('No PodBus library coverage was found in ${directory.path}.');
+    stderr.writeln(
+      'No PodBus library coverage was found in ${directory.path}.',
+    );
     exitCode = 1;
     return;
   }
@@ -82,8 +84,9 @@ void main(List<String> arguments) {
     'PodBus coverage: ${percentage.toStringAsFixed(2)}% '
     '($covered/$total executable lines)',
   );
-  for (final entry in packages.entries.toList()
-    ..sort((left, right) => left.key.compareTo(right.key))) {
+  for (final entry
+      in packages.entries.toList()
+        ..sort((left, right) => left.key.compareTo(right.key))) {
     stdout.writeln(
       '  ${entry.key}: ${entry.value.percentage.toStringAsFixed(2)}% '
       '(${entry.value.covered}/${entry.value.total})',
