@@ -1,0 +1,36 @@
+name: Debug Serverpod 5401 focused tests
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  focused:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: serverpod/serverpod
+          ref: main
+          path: serverpod
+          fetch-depth: 1
+      - id: dart-version
+        run: echo "version=$(tr -d "'^" < serverpod/DART_VERSION)" >> "$GITHUB_OUTPUT"
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: ${{ steps.dart-version.outputs.version }}
+      - working-directory: serverpod/tools/serverpod_cli
+        run: dart pub get
+      - run: python3 ci/apply_serverpod_5401.py
+      - working-directory: serverpod
+        run: dart format tools/serverpod_cli/lib/src/analyzer/models/validation/restrictions.dart tools/serverpod_cli/test/analyzer/models/stateful_analyzer/model_validation/relation/relation_database_action_test.dart
+      - name: Focused test output
+        working-directory: serverpod/tools/serverpod_cli
+        run: dart test --reporter expanded test/analyzer/models/stateful_analyzer/model_validation/relation/relation_database_action_test.dart
