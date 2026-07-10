@@ -1,0 +1,45 @@
+name: Maintenance autofix
+
+on:
+  push:
+    branches:
+      - agent-production-foundation
+
+permissions:
+  contents: write
+
+concurrency:
+  group: maintenance-autofix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  autofix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: agent-production-foundation
+          fetch-depth: 0
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
+        with:
+          sdk: 3.12.0
+      - run: dart pub get
+      - name: Apply safe Dart fixes
+        run: |
+          dart fix --apply
+          dart format .
+          dart analyze .
+      - name: Commit fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "Apply final Dart analyzer fixes"
+          git push origin HEAD:agent-production-foundation
