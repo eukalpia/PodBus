@@ -1,0 +1,149 @@
+name: Validate Serverpod 5401 fix
+
+on:
+  push:
+    branches:
+      - agent/serverpod-5401-validation-ci
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout validation harness
+        uses: actions/checkout@v4
+
+      - name: Checkout Serverpod
+        uses: actions/checkout@v4
+        with:
+          repository: serverpod/serverpod
+          ref: main
+          path: serverpod
+          fetch-depth: 1
+
+      - name: Read required Dart version
+        id: dart-version
+        shell: bash
+        run: echo "version=$(tr -d "'^" < serverpod/DART_VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Dart
+        uses: dart-lang/setup-dart@v1
+        with:
+          sdk: ${{ steps.dart-version.outputs.version }}
+
+      - name: Resolve Serverpod CLI dependencies
+        working-directory: serverpod/tools/serverpod_cli
+        run: dart pub get
+
+      - name: Prove the current analyzer accepts invalid foreign-key actions
+        shell: bash
+        run: |
+          cat > serverpod/tools/serverpod_cli/test/analyzer/models/stateful_analyzer/model_validation/relation/relation_database_action_regression_baseline_test.dart <<'DART'
+          import 'package:serverpod_cli/src/analyzer/models/stateful_analyzer.dart';
+          import 'package:serverpod_cli/src/generator/code_generation_collector.dart';
+          import 'package:test/test.dart';
+
+          import '../../../../../test_util/builders/generator_config_builder.dart';
+          import '../../../../../test_util/builders/model_source_builder.dart';
+
+          void main() {
+            var config = GeneratorConfigBuilder().build();
+
+            test('current analyzer accepts SetNull on a non-nullable FK', () {
+              var collector = CodeGenerationCollector();
+              StatefulAnalyzer(
+                config,
+                [
+                  ModelSourceBuilder().withYaml(
+                    '''
+          class: Example
+          table: example
+          fields:
+            exampleId: int
+            example: Example?, relation(field=exampleId, onDelete=SetNull)
+          ''',
+                  ).build(),
+                ],
+                onErrorsCollector(collector),
+              ).validateAll();
+
+              expect(collector.errors, isEmpty);
+            });
+
+            test('current analyzer accepts SetDefault without a DB default', () {
+              var collector = CodeGenerationCollector();
+              StatefulAnalyzer(
+                config,
+                [
+                  ModelSourceBuilder().withYaml(
+                    '''
+          class: Example
+          table: example
+          fields:
+            exampleId: int
+            example: Example?, relation(field=exampleId, onUpdate=SetDefault)
+          ''',
+                  ).build(),
+                ],
+                onErrorsCollector(collector),
+              ).validateAll();
+
+              expect(collector.errors, isEmpty);
+            });
+          }
+          DART
+          cd serverpod/tools/serverpod_cli
+          dart test test/analyzer/models/stateful_analyzer/model_validation/relation/relation_database_action_regression_baseline_test.dart
+          rm test/analyzer/models/stateful_analyzer/model_validation/relation/relation_database_action_regression_baseline_test.dart
+
+      - name: Apply proposed fix and regression tests
+        run: python3 ci/apply_serverpod_5401.py
+
+      - name: Format changed Dart files
+        working-directory: serverpod
+        run: |
+          dart format \
+            tools/serverpod_cli/lib/src/analyzer/models/validation/restrictions.dart \
+            tools/serverpod_cli/test/analyzer/models/stateful_analyzer/model_validation/relation/relation_database_action_test.dart
+
+      - name: Verify formatter produced no further changes
+        working-directory: serverpod
+        run: |
+          dart format --output=none --set-exit-if-changed \
+            tools/serverpod_cli/lib/src/analyzer/models/validation/restrictions.dart \
+            tools/serverpod_cli/test/analyzer/models/stateful_analyzer/model_validation/relation/relation_database_action_test.dart
+
+      - name: Analyze Serverpod CLI
+        working-directory: serverpod/tools/serverpod_cli
+        run: dart analyze
+
+      - name: Run focused database-action regression tests
+        working-directory: serverpod/tools/serverpod_cli
+        run: dart test test/analyzer/models/stateful_analyzer/model_validation/relation/relation_database_action_test.dart
+
+      - name: Run all relation analyzer tests
+        working-directory: serverpod/tools/serverpod_cli
+        run: dart test test/analyzer/models/stateful_analyzer/model_validation/relation
+
+      - name: Export reviewed patch
+        working-directory: serverpod
+        run: |
+          git diff --check
+          git diff -- \
+            tools/serverpod_cli/lib/src/analyzer/models/validation/restrictions.dart \
+            tools/serverpod_cli/test/analyzer/models/stateful_analyzer/model_validation/relation/relation_database_action_test.dart \
+            tools/serverpod_cli/CHANGELOG.md \
+            > ../serverpod-5401.patch
+          test -s ../serverpod-5401.patch
+
+      - name: Upload patch artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: serverpod-5401-patch
+          path: serverpod-5401.patch
+          if-no-files-found: error
