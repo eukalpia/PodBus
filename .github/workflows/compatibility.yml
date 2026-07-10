@@ -34,7 +34,18 @@ jobs:
       - name: Resolve dependencies
         run: dart pub get
       - name: Analyze
-        run: dart analyze .
+        shell: bash
+        run: |
+          set -o pipefail
+          dart analyze . 2>&1 | tee analyzer.log
+      - name: Upload analyzer diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: analyzer-${{ matrix.sdk }}
+          path: analyzer.log
+          if-no-files-found: warn
+          retention-days: 7
       - name: Run unit tests
         run: >-
           dart test
