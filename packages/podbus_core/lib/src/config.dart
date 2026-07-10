@@ -160,10 +160,7 @@ final class MessagingConfig {
     limits.validateHeaders(headers.toMap());
   }
 
-  void validateRawOutbound(
-    List<int> bytes,
-    Map<String, Object?> headers,
-  ) {
+  void validateRawOutbound(List<int> bytes, Map<String, Object?> headers) {
     limits.validatePayload(bytes);
     limits.validateHeaders(headers);
   }

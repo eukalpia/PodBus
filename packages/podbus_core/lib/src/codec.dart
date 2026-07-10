@@ -31,10 +31,7 @@ final class EncodedMessage {
 }
 
 typedef MessageJsonEncoder<T> = Object? Function(T value);
-typedef MessageJsonDecoder<T> = T Function(
-  Object? json,
-  int schemaVersion,
-);
+typedef MessageJsonDecoder<T> = T Function(Object? json, int schemaVersion);
 
 final class MessageCodecRegistry {
   final Map<Type, _MessageRegistration> _byDartType = {};
@@ -125,7 +122,8 @@ final class JsonMessageCodec implements MessageCodec {
         (_, final registered?) => registered.encode(payload),
         _ => payload,
       };
-      final effectiveSchemaVersion = registration?.schemaVersion ?? schemaVersion;
+      final effectiveSchemaVersion =
+          registration?.schemaVersion ?? schemaVersion;
       return EncodedMessage(
         bytes: utf8.encode(jsonEncode(json)),
         contentType: contentType,

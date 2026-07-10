@@ -12,11 +12,9 @@ import 'message_bus.dart';
 import 'message_context.dart';
 
 final class InMemoryMessageBus implements MessageBus {
-  InMemoryMessageBus({
-    MessagingConfig? messagingConfig,
-    Uuid? uuid,
-  }) : messagingConfig = messagingConfig ?? MessagingConfig(),
-       _uuid = uuid ?? const Uuid();
+  InMemoryMessageBus({MessagingConfig? messagingConfig, Uuid? uuid})
+    : messagingConfig = messagingConfig ?? MessagingConfig(),
+      _uuid = uuid ?? const Uuid();
 
   static const _capabilities = MessagingCapabilities({
     MessagingCapability.publishSubscribe,

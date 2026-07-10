@@ -17,10 +17,7 @@ void main() {
 
     test('rejects outbound messages above configured limits', () {
       final config = MessagingConfig(
-        limits: const MessagingLimits(
-          maxPayloadBytes: 4,
-          maxHeaderBytes: 32,
-        ),
+        limits: const MessagingLimits(maxPayloadBytes: 4, maxHeaderBytes: 32),
       );
 
       expect(

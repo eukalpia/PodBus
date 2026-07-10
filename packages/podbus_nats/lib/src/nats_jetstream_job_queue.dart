@@ -256,9 +256,13 @@ final class NatsJetStreamJobQueue implements DurableJobQueue {
       EncodedMessage(
         bytes: message.bytes,
         contentType:
-            message.headers[PodBusWireHeaders.contentType] ?? JsonMessageCodec.contentType,
+            message.headers[PodBusWireHeaders.contentType] ??
+            JsonMessageCodec.contentType,
         schemaVersion:
-            int.tryParse(message.headers[PodBusWireHeaders.schemaVersion] ?? '') ?? 1,
+            int.tryParse(
+              message.headers[PodBusWireHeaders.schemaVersion] ?? '',
+            ) ??
+            1,
         messageType: message.headers[PodBusWireHeaders.messageType],
       ),
     );
@@ -283,21 +287,19 @@ final class NatsJetStreamJobQueue implements DurableJobQueue {
       if (!policy.includeOriginalPayload)
         PodBusWireHeaders.deadLetterPayloadOmitted: 'true',
       if (policy.includeErrorDetails && error != null)
-        PodBusWireHeaders.deadLetterError:
-            messagingConfig.limits.truncateError(error),
+        PodBusWireHeaders.deadLetterError: messagingConfig.limits.truncateError(
+          error,
+        ),
       if (policy.includeErrorDetails && stackTrace != null)
-        PodBusWireHeaders.deadLetterStackTrace:
-            messagingConfig.limits.truncateError(stackTrace),
+        PodBusWireHeaders.deadLetterStackTrace: messagingConfig.limits
+            .truncateError(stackTrace),
     };
-    final deadLetterHeaders = headers
-        .withoutIdempotencyKey()
-        .copyWith(custom: customHeaders);
-    final bytes = policy.includeOriginalPayload
-        ? message.bytes
-        : const <int>[];
+    final deadLetterHeaders = headers.withoutIdempotencyKey().copyWith(
+      custom: customHeaders,
+    );
+    final bytes = policy.includeOriginalPayload ? message.bytes : const <int>[];
     final wireHeaders = <String, String>{
-      for (final MapEntry(:key, :value)
-          in deadLetterHeaders.toMap().entries)
+      for (final MapEntry(:key, :value) in deadLetterHeaders.toMap().entries)
         if (value != null) key: value.toString(),
       PodBusWireHeaders.contentType: policy.includeOriginalPayload
           ? (message.headers[PodBusWireHeaders.contentType] ??
@@ -452,11 +454,16 @@ final class NatsJetStreamJobQueue implements DurableJobQueue {
       custom: {
         ...headers.custom,
         PodBusWireHeaders.retryMaxAttempts: retryPolicy.maxAttempts.toString(),
-        PodBusWireHeaders.retryInitialDelayMicros: retryPolicy.initialDelay.inMicroseconds
+        PodBusWireHeaders.retryInitialDelayMicros: retryPolicy
+            .initialDelay
+            .inMicroseconds
             .toString(),
-        PodBusWireHeaders.retryMaxDelayMicros: retryPolicy.maxDelay.inMicroseconds
+        PodBusWireHeaders.retryMaxDelayMicros: retryPolicy
+            .maxDelay
+            .inMicroseconds
             .toString(),
-        PodBusWireHeaders.retryBackoffMultiplier: retryPolicy.backoffMultiplier.toString(),
+        PodBusWireHeaders.retryBackoffMultiplier: retryPolicy.backoffMultiplier
+            .toString(),
         PodBusWireHeaders.retryJitter: retryPolicy.jitter.toString(),
       },
     );
@@ -475,7 +482,9 @@ final class NatsJetStreamJobQueue implements DurableJobQueue {
     final backoffMultiplier = double.tryParse(
       headers.custom[PodBusWireHeaders.retryBackoffMultiplier] ?? '',
     );
-    final jitter = double.tryParse(headers.custom[PodBusWireHeaders.retryJitter] ?? '');
+    final jitter = double.tryParse(
+      headers.custom[PodBusWireHeaders.retryJitter] ?? '',
+    );
 
     if (maxAttempts == null ||
         initialDelayMicros == null ||

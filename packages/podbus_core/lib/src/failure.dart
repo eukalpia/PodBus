@@ -9,9 +9,8 @@ enum MessagingFailureKind {
   infrastructure,
 }
 
-typedef MessagingFailureClassifier = MessagingFailureKind Function(
-  Object error,
-);
+typedef MessagingFailureClassifier =
+    MessagingFailureKind Function(Object error);
 
 MessagingFailureKind defaultMessagingFailureClassifier(Object error) {
   return switch (error) {

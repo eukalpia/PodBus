@@ -9,8 +9,7 @@ abstract final class PodBusWireHeaders {
   static const deadLetterPayloadOmitted = 'podbus-dead-letter-payload-omitted';
 
   static const retryMaxAttempts = 'podbus-retry-max-attempts';
-  static const retryInitialDelayMicros =
-      'podbus-retry-initial-delay-micros';
+  static const retryInitialDelayMicros = 'podbus-retry-initial-delay-micros';
   static const retryMaxDelayMicros = 'podbus-retry-max-delay-micros';
   static const retryBackoffMultiplier = 'podbus-retry-backoff-multiplier';
   static const retryJitter = 'podbus-retry-jitter';

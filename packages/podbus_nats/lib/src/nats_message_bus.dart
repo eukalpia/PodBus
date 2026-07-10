@@ -270,25 +270,27 @@ final class _NatsSubscription implements Subscription {
           _streamSubscription?.pause();
         }
         late final Future<void> task;
-        task = Future<void>.sync(() => onMessage(message)).then<void>(
-          (_) {},
-          onError: (Object error, StackTrace stackTrace) {
-            lastError = error;
-            lastStackTrace = stackTrace;
-            messagingConfig.log(
-              MessagingLogLevel.error,
-              'NATS subscription handler failed.',
-              error: error,
-              stackTrace: stackTrace,
-              attributes: {'transport': 'nats'},
-            );
-          },
-        ).whenComplete(() {
-          _active.remove(task);
-          if (!_closed && _active.length < concurrency) {
-            _streamSubscription?.resume();
-          }
-        });
+        task = Future<void>.sync(() => onMessage(message))
+            .then<void>(
+              (_) {},
+              onError: (Object error, StackTrace stackTrace) {
+                lastError = error;
+                lastStackTrace = stackTrace;
+                messagingConfig.log(
+                  MessagingLogLevel.error,
+                  'NATS subscription handler failed.',
+                  error: error,
+                  stackTrace: stackTrace,
+                  attributes: {'transport': 'nats'},
+                );
+              },
+            )
+            .whenComplete(() {
+              _active.remove(task);
+              if (!_closed && _active.length < concurrency) {
+                _streamSubscription?.resume();
+              }
+            });
         _active.add(task);
       },
       onError: (Object error, StackTrace stackTrace) {
@@ -314,9 +316,9 @@ final class _NatsSubscription implements Subscription {
     await _streamSubscription?.cancel();
     await _delegate.close();
     if (_active.isNotEmpty) {
-      await Future.wait(_active.toList()).timeout(
-        messagingConfig.shutdownTimeout,
-      );
+      await Future.wait(
+        _active.toList(),
+      ).timeout(messagingConfig.shutdownTimeout);
     }
     onClose();
   }

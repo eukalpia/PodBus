@@ -238,9 +238,13 @@ final class KafkaEventBus implements MessageBus, DurableJobQueue {
           details: {
             'consumerType': 'subscription',
             'subject': subscription.subject,
-            'lastConsumerError': messagingConfig.limits.truncateError(lastError),
+            'lastConsumerError': messagingConfig.limits.truncateError(
+              lastError,
+            ),
             if (subscription.lastStackTrace != null)
-              'lastConsumerStackTrace': messagingConfig.limits.truncateError(subscription.lastStackTrace!),
+              'lastConsumerStackTrace': messagingConfig.limits.truncateError(
+                subscription.lastStackTrace!,
+              ),
           },
         );
       }
@@ -253,9 +257,13 @@ final class KafkaEventBus implements MessageBus, DurableJobQueue {
           details: {
             'consumerType': 'worker',
             'topic': worker.topic,
-            'lastConsumerError': messagingConfig.limits.truncateError(lastError),
+            'lastConsumerError': messagingConfig.limits.truncateError(
+              lastError,
+            ),
             if (worker.lastStackTrace != null)
-              'lastConsumerStackTrace': messagingConfig.limits.truncateError(worker.lastStackTrace!),
+              'lastConsumerStackTrace': messagingConfig.limits.truncateError(
+                worker.lastStackTrace!,
+              ),
           },
         );
       }
@@ -404,11 +412,11 @@ final class KafkaEventBus implements MessageBus, DurableJobQueue {
         if (!policy.includeOriginalPayload)
           PodBusWireHeaders.deadLetterPayloadOmitted: 'true',
         if (policy.includeErrorDetails && error != null)
-          PodBusWireHeaders.deadLetterError:
-              messagingConfig.limits.truncateError(error),
+          PodBusWireHeaders.deadLetterError: messagingConfig.limits
+              .truncateError(error),
         if (policy.includeErrorDetails && stackTrace != null)
-          PodBusWireHeaders.deadLetterStackTrace:
-              messagingConfig.limits.truncateError(stackTrace),
+          PodBusWireHeaders.deadLetterStackTrace: messagingConfig.limits
+              .truncateError(stackTrace),
       },
     );
 
@@ -425,7 +433,8 @@ final class KafkaEventBus implements MessageBus, DurableJobQueue {
       contentType: original?.contentType ?? 'application/octet-stream',
       schemaVersion: original?.schemaVersion ?? 1,
       messageType: original?.messageType,
-      payload: original?.payloadBytes ??
+      payload:
+          original?.payloadBytes ??
           (policy.includeOriginalPayload ? record.bytes : const <int>[]),
     );
     messagingConfig.limits.validatePayload(bytes);

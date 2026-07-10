@@ -50,10 +50,7 @@ void main() {
         ..register<LeadPayload>(
           messageType: 'lead.created',
           schemaVersion: 2,
-          encode: (value) => {
-            'leadId': value.leadId,
-            'email': value.email,
-          },
+          encode: (value) => {'leadId': value.leadId, 'email': value.email},
           decode: (json, schemaVersion) {
             expect(schemaVersion, 2);
             return LeadPayload.fromJson(json);

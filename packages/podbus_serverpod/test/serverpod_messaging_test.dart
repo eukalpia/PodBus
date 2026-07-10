@@ -148,9 +148,8 @@ final class ImmediateMessageBus implements MessageBus {
   var connected = false;
 
   @override
-  MessagingCapabilities get capabilities => const MessagingCapabilities({
-    MessagingCapability.publishSubscribe,
-  });
+  MessagingCapabilities get capabilities =>
+      const MessagingCapabilities({MessagingCapability.publishSubscribe});
 
   @override
   Future<void> close({Duration? timeout}) async {

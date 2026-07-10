@@ -376,15 +376,17 @@ final class InMemoryDurableJobQueue implements DurableJobQueue {
       if (!policy.includeOriginalPayload)
         PodBusWireHeaders.deadLetterPayloadOmitted: 'true',
       if (policy.includeErrorDetails && error != null)
-        PodBusWireHeaders.deadLetterError:
-            messagingConfig.limits.truncateError(error),
+        PodBusWireHeaders.deadLetterError: messagingConfig.limits.truncateError(
+          error,
+        ),
       if (policy.includeErrorDetails && stackTrace != null)
-        PodBusWireHeaders.deadLetterStackTrace:
-            messagingConfig.limits.truncateError(stackTrace),
+        PodBusWireHeaders.deadLetterStackTrace: messagingConfig.limits
+            .truncateError(stackTrace),
     };
-    final deadLetterHeaders = job.headers
-        .withoutIdempotencyKey()
-        .copyWith(attempt: attempt, custom: custom);
+    final deadLetterHeaders = job.headers.withoutIdempotencyKey().copyWith(
+      attempt: attempt,
+      custom: custom,
+    );
     final payload = policy.includeOriginalPayload
         ? job.payload
         : <String, Object?>{
