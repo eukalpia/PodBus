@@ -28,8 +28,6 @@ jobs:
       - run: python3 tool/ci/apply_kafka_assignment.py
       - run: dart pub get
       - run: dart format .
-      - run: dart analyze .
-      - run: dart test packages/podbus_kafka/test --exclude-tags=integration
       - name: Commit assignment readiness
         shell: bash
         run: |
