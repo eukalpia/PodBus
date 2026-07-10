@@ -1,0 +1,49 @@
+name: Fix health semantics
+
+on:
+  push:
+    branches:
+      - agent-production-foundation
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent-production-foundation
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: 3.12.0
+      - name: Apply health semantics
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          for name in [
+              'packages/podbus_rabbitmq/lib/src/rabbitmq_message_bus.dart',
+              'packages/podbus_kafka/lib/src/kafka_event_bus.dart',
+          ]:
+              path = Path(name)
+              text = path.read_text()
+              text = text.replace('return HealthCheckResult.degraded(', 'return HealthCheckResult.unhealthy(')
+              path.write_text(text)
+          PY
+          rm -rf .ci
+          rm .github/workflows/fix-health-semantics.yml
+      - name: Validate
+        run: |
+          dart pub get
+          dart format .
+          dart analyze .
+          dart test packages/podbus_core/test packages/podbus_nats/test packages/podbus_rabbitmq/test packages/podbus_kafka/test packages/podbus_serverpod/test --exclude-tags=integration
+      - name: Commit validated fix
+        run: |
+          git config user.name "PodBus Automation"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "Treat stopped consumers as unhealthy"
+          git push
