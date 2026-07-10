@@ -31,18 +31,48 @@ jobs:
     name: Dependency review
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: read
       pull-requests: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
+      - id: review
+        continue-on-error: true
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
         with:
           fail-on-severity: moderate
           comment-summary-in-pr: always
           license-check: true
           deny-licenses: GPL-2.0, GPL-3.0, AGPL-1.0, AGPL-3.0
+          retry-on-snapshot-warnings: true
+          retry-on-snapshot-warnings-timeout: 300
+      - name: Save dependency-review diagnostics
+        if: always()
+        env:
+          COMMENT_CONTENT: ${{ steps.review.outputs.comment-content }}
+          DEPENDENCY_CHANGES: ${{ steps.review.outputs.dependency-changes }}
+          VULNERABLE_CHANGES: ${{ steps.review.outputs.vulnerable-changes }}
+          INVALID_LICENSE_CHANGES: ${{ steps.review.outputs.invalid-license-changes }}
+          DENIED_CHANGES: ${{ steps.review.outputs.denied-changes }}
+        run: |
+          mkdir -p dependency-review
+          printf '%s\n' "$COMMENT_CONTENT" > dependency-review/summary.md
+          printf '%s\n' "$DEPENDENCY_CHANGES" > dependency-review/dependency-changes.json
+          printf '%s\n' "$VULNERABLE_CHANGES" > dependency-review/vulnerable-changes.json
+          printf '%s\n' "$INVALID_LICENSE_CHANGES" > dependency-review/invalid-license-changes.json
+          printf '%s\n' "$DENIED_CHANGES" > dependency-review/denied-changes.json
+      - name: Upload dependency-review diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dependency-review-diagnostics
+          path: dependency-review
+          if-no-files-found: error
+          retention-days: 14
+      - name: Enforce dependency review
+        if: steps.review.outcome == 'failure'
+        run: exit 1
 
   secrets:
     name: Secret scan
