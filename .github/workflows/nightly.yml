@@ -1,0 +1,134 @@
+name: Nightly reliability
+
+on:
+  schedule:
+    - cron: "41 1 * * *"
+  workflow_dispatch:
+    inputs:
+      repetitions:
+        description: Consecutive integration-suite repetitions
+        required: false
+        default: "10"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-reliability
+  cancel-in-progress: false
+
+env:
+  DART_SDK: 3.12.0
+  PODBUS_RUN_INTEGRATION_TESTS: "true"
+  REPETITIONS: ${{ inputs.repetitions || '10' }}
+
+jobs:
+  broker-stability:
+    name: ${{ matrix.name }} stability
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: NATS
+            service: nats
+            readiness: tool/ci/wait_for_nats.sh
+            tests: packages/podbus_nats/test/nats_core_integration_test.dart packages/podbus_nats/test/nats_jetstream_integration_test.dart
+          - name: RabbitMQ
+            service: rabbitmq
+            readiness: tool/ci/wait_for_rabbitmq.sh
+            tests: packages/podbus_rabbitmq/test/rabbitmq_integration_test.dart
+          - name: Kafka
+            service: kafka
+            readiness: tool/ci/wait_for_kafka.sh
+            tests: packages/podbus_kafka/test/kafka_integration_test.dart
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: ${{ env.DART_SDK }}
+      - name: Install Kafka native dependency
+        if: matrix.service == 'kafka'
+        run: sudo apt-get update && sudo apt-get install -y librdkafka-dev
+      - name: Resolve dependencies
+        run: dart pub get
+      - name: Start broker
+        run: docker compose -f docker-compose.integration.yaml up -d ${{ matrix.service }}
+      - name: Wait for broker readiness
+        run: bash ${{ matrix.readiness }}
+      - name: Run repeated integration suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          for run in $(seq 1 "$REPETITIONS"); do
+            echo "::group::${{ matrix.name }} integration repetition ${run}/${REPETITIONS}"
+            dart test ${{ matrix.tests }} --tags=integration --reporter=expanded
+            echo "::endgroup::"
+          done
+      - name: Restart broker
+        run: docker compose -f docker-compose.integration.yaml restart ${{ matrix.service }}
+      - name: Wait after restart
+        run: bash ${{ matrix.readiness }}
+      - name: Verify after restart
+        run: dart test ${{ matrix.tests }} --tags=integration --reporter=expanded
+      - name: Capture broker logs
+        if: always()
+        run: docker compose -f docker-compose.integration.yaml logs --no-color ${{ matrix.service }} > ${{ matrix.service }}-nightly.log
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.service }}-nightly-diagnostics
+          path: ${{ matrix.service }}-nightly.log
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Stop broker
+        if: always()
+        run: docker compose -f docker-compose.integration.yaml down -v
+
+  stress-smoke:
+    name: Transport stress smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: ${{ env.DART_SDK }}
+      - name: Install librdkafka
+        run: sudo apt-get update && sudo apt-get install -y librdkafka-dev
+      - name: Resolve dependencies
+        run: dart pub get
+      - name: Start brokers
+        run: docker compose -f docker-compose.integration.yaml up -d nats rabbitmq kafka
+      - name: Wait for brokers
+        run: |
+          bash tool/ci/wait_for_nats.sh
+          bash tool/ci/wait_for_rabbitmq.sh
+          bash tool/ci/wait_for_kafka.sh
+      - name: Run stress smoke
+        env:
+          PODBUS_STRESS_MESSAGES: "10000"
+          PODBUS_STRESS_MODES: fast,durable,worker,failure
+          PODBUS_STRESS_TRANSPORTS: nats,jetstream,rabbitmq,kafka
+          PODBUS_STRESS_PAYLOAD_SIZES: "256,1024"
+          PODBUS_STRESS_CONSUMERS: "1,4"
+          PODBUS_STRESS_PRODUCERS: "4"
+          PODBUS_STRESS_HANDLER_SLEEP_MS: "0,5"
+          PODBUS_STRESS_BROKER: github-actions-nightly
+        run: dart run tool/stress_transports.dart | tee stress-results.txt
+      - name: Upload stress results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-stress-results
+          path: stress-results.txt
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Capture broker logs
+        if: failure()
+        run: docker compose -f docker-compose.integration.yaml logs --no-color > nightly-brokers.log
+      - name: Stop brokers
+        if: always()
+        run: docker compose -f docker-compose.integration.yaml down -v
