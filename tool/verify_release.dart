@@ -5,6 +5,7 @@ const _packages = <String>[
   'podbus_nats',
   'podbus_rabbitmq',
   'podbus_kafka',
+  'podbus_postgres',
   'podbus_serverpod',
 ];
 
