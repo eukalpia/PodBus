@@ -1,7 +1,9 @@
+export 'src/capabilities.dart';
 export 'src/codec.dart';
 export 'src/config.dart';
 export 'src/durable_job_queue.dart';
 export 'src/exceptions.dart';
+export 'src/failure.dart';
 export 'src/headers.dart';
 export 'src/health.dart';
 export 'src/idempotency_store.dart';
@@ -11,6 +13,4 @@ export 'src/message_bus.dart';
 export 'src/message_context.dart';
 export 'src/message_envelope.dart';
 export 'src/policies.dart';
-export 'src/capabilities.dart';
-export 'src/failure.dart';
 export 'src/wire_protocol.dart';
