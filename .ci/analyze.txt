@@ -1,0 +1,7 @@
+Analyzing ....
+
+   info - packages/podbus_core/lib/podbus_core.dart:14:1 - Sort directive sections alphabetically. Try sorting the directives. - directives_ordering
+   info - packages/podbus_core/lib/src/in_memory_durable_job_queue.dart:26:8 - Use an initializing formal to assign a parameter to a field. Try using an initialing formal ('this._idempotencyTtl') to initialize the field. - prefer_initializing_formals
+   info - packages/podbus_kafka/lib/src/kafka_event_bus.dart:512:9 - Use the null-aware marker '?' rather than a null check via an 'if'. Try using '?'. - use_null_aware_elements
+
+3 issues found.
