@@ -17,10 +17,10 @@ jobs:
     timeout-minutes: 30
     environment: release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
-      - uses: dart-lang/setup-dart@v1
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
         with:
           sdk: 3.12.0
       - name: Resolve dependencies
@@ -55,21 +55,20 @@ jobs:
           git archive --format=tar.gz --prefix="${prefix}/" -o "${prefix}.tar.gz" HEAD
           git archive --format=zip --prefix="${prefix}/" -o "${prefix}.zip" HEAD
           sha256sum "${prefix}.tar.gz" "${prefix}.zip" > SHA256SUMS
-      - name: Generate SBOM
-        uses: anchore/sbom-action@v0
-        with:
-          path: .
-          format: spdx-json
-          output-file: PodBus-${{ github.ref_name }}.spdx.json
-      - name: Attest source archive
-        uses: actions/attest-build-provenance@v2
+      - name: Generate SPDX SBOM
+        run: >-
+          dart run tool/generate_sbom.dart
+          --name PodBus-${{ github.ref_name }}
+          --output PodBus-${{ github.ref_name }}.spdx.json
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
           subject-path: |
             PodBus-${{ github.ref_name }}.tar.gz
             PodBus-${{ github.ref_name }}.zip
             PodBus-${{ github.ref_name }}.spdx.json
       - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           generate_release_notes: true
           fail_on_unmatched_files: true
