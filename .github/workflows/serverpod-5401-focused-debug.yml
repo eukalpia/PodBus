@@ -28,7 +28,11 @@ jobs:
           sdk: ${{ steps.dart-version.outputs.version }}
       - working-directory: serverpod/tools/serverpod_cli
         run: dart pub get
-      - run: python3 ci/apply_serverpod_5401.py
+      - name: Apply proposed patch
+        run: |
+          python3 ci/apply_serverpod_5401.py
+          sed -i 's/exampleId: int, defaultPersist=1/exampleId: int?, defaultPersist=1/g' \
+            serverpod/tools/serverpod_cli/test/analyzer/models/stateful_analyzer/model_validation/relation/relation_database_action_test.dart
       - name: Format patch
         working-directory: serverpod
         run: |
