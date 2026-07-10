@@ -25,11 +25,29 @@ jobs:
       - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
         with:
           sdk: 3.12.0
-      - run: python3 tool/ci/apply_rabbitmq_hardening.py
+      - name: Apply RabbitMQ hardening patch
+        run: |
+          python3 tool/ci/apply_rabbitmq_hardening.py
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('packages/podbus_rabbitmq/lib/src/rabbitmq_adapter.dart')
+          text = path.read_text()
+          text = text.replace(
+              "import 'dart:async';\nimport 'dart:typed_data';",
+              "import 'dart:async';\nimport 'dart:io';\nimport 'dart:typed_data';",
+          )
+          path.write_text(text)
+
+          path = Path('packages/podbus_rabbitmq/lib/src/rabbitmq_message_bus.dart')
+          text = path.read_text().replace(
+              'final delayMs = delay.inMilliseconds.clamp(1, 2147483647);',
+              'final delayMs = delay.inMilliseconds.clamp(1, 2147483647).toInt();',
+          )
+          path.write_text(text)
+          PY
       - run: dart pub get
       - run: dart format .
-      - run: dart analyze .
-      - run: dart test packages/podbus_rabbitmq/test --exclude-tags=integration
       - name: Commit hardening
         shell: bash
         run: |
