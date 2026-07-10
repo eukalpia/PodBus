@@ -35,6 +35,8 @@ jobs:
             packages/podbus_nats/test \
             packages/podbus_rabbitmq/test \
             packages/podbus_kafka/test \
+            packages/podbus_postgres/test \
+            packages/podbus_observability/test \
             packages/podbus_serverpod/test \
             --exclude-tags=integration
       - name: Verify tag matches package version
