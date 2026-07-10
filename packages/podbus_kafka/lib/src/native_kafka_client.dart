@@ -173,6 +173,7 @@ final class NativeKafkaConsumer {
   final RdkafkaBindings _bindings;
   ffi.Pointer<RdKafkaHandle>? _kafka;
   ffi.Pointer<RdKafkaMessage>? _pendingMessage;
+  ffi.Pointer<RdKafkaMessage>? _bufferedMessage;
 
   static NativeKafkaConsumer connect({
     required RdkafkaBindings bindings,
@@ -225,13 +226,62 @@ final class NativeKafkaConsumer {
     }
   }
 
+  void waitForAssignment(Duration timeout) {
+    if (timeout <= Duration.zero) {
+      throw const MessagingConfigurationException(
+        'Kafka assignment timeout must be greater than zero.',
+      );
+    }
+
+    final kafka = _requireKafka();
+    final deadline = DateTime.now().add(timeout);
+    final assignment = calloc<ffi.Pointer<RdKafkaTopicPartitionList>>();
+    try {
+      while (DateTime.now().isBefore(deadline)) {
+        final event = _bindings.rdKafkaConsumerPoll(kafka, 100);
+        if (event != ffi.nullptr) {
+          if (event.ref.error == rdKafkaRespErrNoError) {
+            _bufferedMessage = event;
+            return;
+          }
+          _bindings.rdKafkaMessageDestroy(event);
+        }
+
+        assignment.value = ffi.nullptr;
+        final result = _bindings.rdKafkaAssignment(kafka, assignment);
+        _ensureNoError(_bindings, result, 'Kafka assignment lookup failed.');
+        final current = assignment.value;
+        if (current != ffi.nullptr) {
+          final assigned = current.ref.count > 0;
+          _bindings.rdKafkaTopicPartitionListDestroy(current);
+          assignment.value = ffi.nullptr;
+          if (assigned) {
+            return;
+          }
+        }
+      }
+    } finally {
+      final current = assignment.value;
+      if (current != ffi.nullptr) {
+        _bindings.rdKafkaTopicPartitionListDestroy(current);
+      }
+      calloc.free(assignment);
+    }
+
+    throw MessagingTimeoutException(
+      'Kafka consumer did not receive a partition assignment within $timeout.',
+      timeout: timeout,
+    );
+  }
+
   NativeKafkaRecord? poll(Duration timeout) {
     _releasePendingMessage();
 
-    final message = _bindings.rdKafkaConsumerPoll(
-      _requireKafka(),
-      timeout.inMilliseconds,
-    );
+    final buffered = _bufferedMessage;
+    _bufferedMessage = null;
+    final message =
+        buffered ??
+        _bindings.rdKafkaConsumerPoll(_requireKafka(), timeout.inMilliseconds);
     if (message == ffi.nullptr) {
       return null;
     }
@@ -276,6 +326,11 @@ final class NativeKafkaConsumer {
     }
 
     _releasePendingMessage();
+    final buffered = _bufferedMessage;
+    if (buffered != null) {
+      _bindings.rdKafkaMessageDestroy(buffered);
+      _bufferedMessage = null;
+    }
     _bindings.rdKafkaUnsubscribe(kafka);
     _bindings.rdKafkaConsumerClose(kafka);
     _bindings.rdKafkaDestroy(kafka);

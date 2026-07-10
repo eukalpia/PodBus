@@ -15,9 +15,37 @@ final class RdKafkaTopic extends ffi.Opaque {}
 
 final class RdKafkaTopicConfig extends ffi.Opaque {}
 
-final class RdKafkaTopicPartitionList extends ffi.Opaque {}
+final class RdKafkaTopicPartitionList extends ffi.Struct {
+  @ffi.Int32()
+  external int count;
 
-final class RdKafkaTopicPartition extends ffi.Opaque {}
+  @ffi.Int32()
+  external int size;
+
+  external ffi.Pointer<RdKafkaTopicPartition> elements;
+}
+
+final class RdKafkaTopicPartition extends ffi.Struct {
+  external ffi.Pointer<ffi.Char> topic;
+
+  @ffi.Int32()
+  external int partition;
+
+  @ffi.Int64()
+  external int offset;
+
+  external ffi.Pointer<ffi.Void> metadata;
+
+  @ffi.Size()
+  external int metadataSize;
+
+  external ffi.Pointer<ffi.Void> opaque;
+
+  @ffi.Int32()
+  external int error;
+
+  external ffi.Pointer<ffi.Void> privateData;
+}
 
 final class RdKafkaMessage extends ffi.Struct {
   @ffi.Int32()
@@ -303,6 +331,22 @@ final class RdkafkaBindings {
         ffi.Int32 Function(ffi.Pointer<RdKafkaHandle>),
         int Function(ffi.Pointer<RdKafkaHandle>)
       >('rd_kafka_consumer_close');
+
+  late final int Function(
+    ffi.Pointer<RdKafkaHandle>,
+    ffi.Pointer<ffi.Pointer<RdKafkaTopicPartitionList>>,
+  )
+  rdKafkaAssignment = _library
+      .lookupFunction<
+        ffi.Int32 Function(
+          ffi.Pointer<RdKafkaHandle>,
+          ffi.Pointer<ffi.Pointer<RdKafkaTopicPartitionList>>,
+        ),
+        int Function(
+          ffi.Pointer<RdKafkaHandle>,
+          ffi.Pointer<ffi.Pointer<RdKafkaTopicPartitionList>>,
+        )
+      >('rd_kafka_assignment');
 
   late final ffi.Pointer<ffi.Char> Function(int) rdKafkaErrorString = _library
       .lookupFunction<

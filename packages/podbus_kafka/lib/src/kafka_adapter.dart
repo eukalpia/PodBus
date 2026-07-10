@@ -99,6 +99,7 @@ final class DartKafkaAdapter implements KafkaAdapter {
       topics: topics,
       properties: _consumerProperties(config, groupId),
     );
+    consumer.waitForAssignment(config.requestTimeout);
     final adapterConsumer = _DartKafkaAdapterConsumer(consumer);
     _consumers.add(adapterConsumer);
     return adapterConsumer;
