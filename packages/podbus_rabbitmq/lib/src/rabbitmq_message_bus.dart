@@ -266,7 +266,7 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
     }
     final lastWorkerError = _lastWorkerError;
     if (lastWorkerError != null) {
-      return HealthCheckResult.degraded(
+      return HealthCheckResult.unhealthy(
         message: 'RabbitMQ is connected, but worker failure handling failed.',
         details: {
           'lastWorkerError': messagingConfig.limits.truncateError(

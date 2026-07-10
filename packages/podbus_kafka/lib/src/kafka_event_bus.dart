@@ -233,7 +233,7 @@ final class KafkaEventBus implements MessageBus, DurableJobQueue {
     for (final subscription in _subscriptions) {
       final lastError = subscription.lastError;
       if (lastError != null) {
-        return HealthCheckResult.degraded(
+        return HealthCheckResult.unhealthy(
           message: 'Kafka is connected, but a consumer loop failed.',
           details: {
             'consumerType': 'subscription',
@@ -252,7 +252,7 @@ final class KafkaEventBus implements MessageBus, DurableJobQueue {
     for (final worker in _workers) {
       final lastError = worker.lastError;
       if (lastError != null) {
-        return HealthCheckResult.degraded(
+        return HealthCheckResult.unhealthy(
           message: 'Kafka is connected, but a consumer loop failed.',
           details: {
             'consumerType': 'worker',
