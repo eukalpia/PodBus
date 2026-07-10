@@ -509,7 +509,7 @@ final class KafkaEventBus implements MessageBus, DurableJobQueue {
         'headers': headers.toMap(),
         'contentType': contentType,
         'schemaVersion': schemaVersion,
-        if (messageType != null) 'messageType': messageType,
+        'messageType': ?messageType,
         'payload': base64Encode(payload),
       }),
     );

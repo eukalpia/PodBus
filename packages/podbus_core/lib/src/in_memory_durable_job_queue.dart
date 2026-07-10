@@ -18,12 +18,11 @@ final class InMemoryDurableJobQueue implements DurableJobQueue {
   InMemoryDurableJobQueue({
     MessagingConfig? messagingConfig,
     IdempotencyStore? idempotencyStore,
-    Duration idempotencyTtl = const Duration(hours: 24),
+    this._idempotencyTtl = const Duration(hours: 24),
     Uuid? uuid,
   }) : messagingConfig = messagingConfig ?? MessagingConfig(),
        _idempotencyStore =
            idempotencyStore ?? messagingConfig?.idempotencyStore,
-       _idempotencyTtl = idempotencyTtl,
        _uuid = uuid ?? const Uuid();
 
   static const _capabilities = MessagingCapabilities({

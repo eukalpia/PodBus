@@ -4,10 +4,8 @@ import 'package:postgres/postgres.dart';
 import 'postgres_schema.dart';
 
 final class PostgresIdempotencyStore implements IdempotencyStore {
-  PostgresIdempotencyStore(
-    this.executor, {
-    PostgresMessagingSchema? schema,
-  }) : schema = schema ?? PostgresMessagingSchema();
+  PostgresIdempotencyStore(this.executor, {PostgresMessagingSchema? schema})
+    : schema = schema ?? PostgresMessagingSchema();
 
   final SessionExecutor executor;
   final PostgresMessagingSchema schema;
@@ -43,10 +41,7 @@ SET
 WHERE ${schema.idempotencyTable}.expires_at <= now()
 RETURNING idempotency_key
 '''),
-        parameters: {
-          'key': key,
-          'ttl_ms': ttl.inMilliseconds,
-        },
+        parameters: {'key': key, 'ttl_ms': ttl.inMilliseconds},
       );
       return result.isNotEmpty;
     });

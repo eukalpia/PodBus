@@ -96,19 +96,19 @@ ON CONFLICT (id) DO NOTHING
         });
       });
 
-      test('prevents a completed inbox message from being reacquired', () async {
-        final inbox = PostgresInbox(pool, schema: schema);
-        final lease = await inbox.acquire(
-          'message-42',
-          workerId: 'worker-a',
-        );
-        expect(lease, isNotNull);
-        await inbox.complete(lease!);
-        expect(
-          await inbox.acquire('message-42', workerId: 'worker-b'),
-          isNull,
-        );
-      });
+      test(
+        'prevents a completed inbox message from being reacquired',
+        () async {
+          final inbox = PostgresInbox(pool, schema: schema);
+          final lease = await inbox.acquire('message-42', workerId: 'worker-a');
+          expect(lease, isNotNull);
+          await inbox.complete(lease!);
+          expect(
+            await inbox.acquire('message-42', workerId: 'worker-b'),
+            isNull,
+          );
+        },
+      );
     },
     tags: 'integration',
     timeout: Timeout(const Duration(minutes: 1)),

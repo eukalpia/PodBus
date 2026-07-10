@@ -20,10 +20,8 @@ final class InboxLease {
 }
 
 final class PostgresInbox {
-  PostgresInbox(
-    this.executor, {
-    PostgresMessagingSchema? schema,
-  }) : schema = schema ?? PostgresMessagingSchema();
+  PostgresInbox(this.executor, {PostgresMessagingSchema? schema})
+    : schema = schema ?? PostgresMessagingSchema();
 
   final SessionExecutor executor;
   final PostgresMessagingSchema schema;

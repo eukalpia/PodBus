@@ -359,7 +359,11 @@ final class PostgresOutboxRelay {
     for (final record in records) {
       try {
         final payload = await outbox.codec.decode<Object?>(record.encoded);
-        await bus.publish<Object?>(record.topic, payload, headers: record.headers);
+        await bus.publish<Object?>(
+          record.topic,
+          payload,
+          headers: record.headers,
+        );
         await outbox.markPublished(record.id, workerId: workerId);
       } on Object catch (error) {
         await outbox.markFailed(
