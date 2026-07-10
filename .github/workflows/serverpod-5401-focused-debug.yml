@@ -1,4 +1,4 @@
-name: Debug Serverpod 5401 focused tests
+name: Validate isolated Serverpod 5401 patch
 
 on:
   pull_request:
@@ -10,9 +10,9 @@ permissions:
   contents: read
 
 jobs:
-  focused:
+  validate-isolated:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -29,23 +29,37 @@ jobs:
       - working-directory: serverpod/tools/serverpod_cli
         run: dart pub get
       - run: python3 ci/apply_serverpod_5401.py
-      - working-directory: serverpod
-        run: dart format tools/serverpod_cli/lib/src/analyzer/models/validation/restrictions.dart tools/serverpod_cli/test/analyzer/models/stateful_analyzer/model_validation/relation/relation_database_action_test.dart
-      - name: Focused test output
-        id: focused
-        continue-on-error: true
-        working-directory: serverpod/tools/serverpod_cli
-        shell: bash
+      - name: Format patch
+        working-directory: serverpod
         run: |
-          set -o pipefail
-          dart test --reporter expanded test/analyzer/models/stateful_analyzer/model_validation/relation/relation_database_action_test.dart 2>&1 | tee ../../../focused-test.log
-      - name: Upload focused test log
-        if: always()
+          dart format \
+            tools/serverpod_cli/lib/src/analyzer/models/validation/restrictions.dart \
+            tools/serverpod_cli/test/analyzer/models/stateful_analyzer/model_validation/relation/relation_database_action_test.dart
+          dart format --output=none --set-exit-if-changed \
+            tools/serverpod_cli/lib/src/analyzer/models/validation/restrictions.dart \
+            tools/serverpod_cli/test/analyzer/models/stateful_analyzer/model_validation/relation/relation_database_action_test.dart
+      - name: Analyze changed implementation and tests
+        working-directory: serverpod/tools/serverpod_cli
+        run: dart analyze
+      - name: Run focused regression tests
+        working-directory: serverpod/tools/serverpod_cli
+        run: dart test --reporter expanded test/analyzer/models/stateful_analyzer/model_validation/relation/relation_database_action_test.dart
+      - name: Run all relation analyzer tests
+        working-directory: serverpod/tools/serverpod_cli
+        run: dart test test/analyzer/models/stateful_analyzer/model_validation/relation
+      - name: Export patch
+        working-directory: serverpod
+        run: |
+          git diff --check
+          git diff -- \
+            tools/serverpod_cli/lib/src/analyzer/models/validation/restrictions.dart \
+            tools/serverpod_cli/test/analyzer/models/stateful_analyzer/model_validation/relation/relation_database_action_test.dart \
+            tools/serverpod_cli/CHANGELOG.md \
+            > ../serverpod-5401.patch
+          test -s ../serverpod-5401.patch
+      - name: Upload tested patch
         uses: actions/upload-artifact@v4
         with:
-          name: serverpod-5401-focused-test-log
-          path: serverpod/focused-test.log
+          name: serverpod-5401-tested-patch
+          path: serverpod-5401.patch
           if-no-files-found: error
-      - name: Fail when focused tests fail
-        if: steps.focused.outcome == 'failure'
-        run: exit 1
