@@ -30,6 +30,7 @@ void main() {
 
         await Future<void>.delayed(Duration.zero);
         expect(client.channelRef.confirmRequested, isTrue);
+        expect(client.channelRef.exchangeRef.lastMandatory, isTrue);
         expect(completed, isFalse);
 
         final properties = client.channelRef.exchangeRef.lastProperties;
@@ -63,6 +64,42 @@ void main() {
       await expectLater(
         publishFuture,
         throwsA(isA<MessagingConnectionException>()),
+      );
+    });
+
+    test('fails mandatory publish when the broker returns it', () async {
+      final client = FakeAmqpClient();
+      final adapter = DartRabbitMqAdapter(client: client);
+      await adapter.connect(_config());
+      await adapter.declareExchange(name: 'podbus.events', durable: true);
+
+      final publishFuture = adapter.publish(
+        exchange: 'podbus.events',
+        routingKey: 'missing.route',
+        bytes: [1, 2, 3],
+        headers: const {'podbus-content-type': 'application/json'},
+        persistent: true,
+      );
+
+      await Future<void>.delayed(Duration.zero);
+      final properties = client.channelRef.exchangeRef.lastProperties;
+      expect(properties, isNotNull);
+      client.channelRef.returnPublish(
+        FakeBasicReturnMessage(
+          properties: properties!,
+          routingKey: 'missing.route',
+        ),
+      );
+
+      await expectLater(
+        publishFuture,
+        throwsA(
+          isA<MessagingConnectionException>().having(
+            (error) => error.message,
+            'message',
+            contains('unroutable'),
+          ),
+        ),
       );
     });
 
@@ -149,6 +186,8 @@ final class FakeAmqpChannel implements amqp.Channel {
   final exchangeRef = FakeAmqpExchange();
   final _publishNotifications =
       StreamController<amqp.PublishNotification>.broadcast();
+  final _returnedMessages =
+      StreamController<amqp.BasicReturnMessage>.broadcast();
   var confirmRequested = false;
   var closed = false;
 
@@ -161,10 +200,30 @@ final class FakeAmqpChannel implements amqp.Channel {
     );
   }
 
+  void returnPublish(amqp.BasicReturnMessage message) {
+    _returnedMessages.add(message);
+  }
+
+  @override
+  StreamSubscription<amqp.BasicReturnMessage> basicReturnListener(
+    void Function(amqp.BasicReturnMessage message) onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) {
+    return _returnedMessages.stream.listen(
+      onData,
+      onError: onError,
+      onDone: onDone,
+      cancelOnError: cancelOnError,
+    );
+  }
+
   @override
   Future<amqp.Channel> close() async {
     closed = true;
     await _publishNotifications.close();
+    await _returnedMessages.close();
     return this;
   }
 
@@ -237,6 +296,7 @@ final class FakeAmqpExchange implements amqp.Exchange {
   Object? lastMessage;
   String? lastRoutingKey;
   amqp.MessageProperties? lastProperties;
+  bool? lastMandatory;
 
   @override
   amqp.Channel get channel => throw UnimplementedError();
@@ -259,6 +319,7 @@ final class FakeAmqpExchange implements amqp.Exchange {
     lastMessage = message;
     lastRoutingKey = routingKey;
     lastProperties = properties;
+    lastMandatory = mandatory;
   }
 
   @override
@@ -279,4 +340,35 @@ final class FakePublishNotification implements amqp.PublishNotification {
 
   @override
   final bool published;
+}
+
+final class FakeBasicReturnMessage implements amqp.BasicReturnMessage {
+  const FakeBasicReturnMessage({
+    required this.properties,
+    required this.routingKey,
+  });
+
+  @override
+  final String exchangeName = 'podbus.events';
+
+  @override
+  final Uint8List? payload = null;
+
+  @override
+  final Map? payloadAsJson = null;
+
+  @override
+  final String? payloadAsString = null;
+
+  @override
+  final amqp.MessageProperties properties;
+
+  @override
+  final int replyCode = 312;
+
+  @override
+  final String replyText = 'NO_ROUTE';
+
+  @override
+  final String routingKey;
 }
