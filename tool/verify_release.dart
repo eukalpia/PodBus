@@ -42,7 +42,10 @@ void main(List<String> arguments) {
       failures.add('$path repository must be $_repository.');
     }
     if (publishTo != 'none') {
-      failures.add('$path must keep publish_to: none until package publishing is enabled deliberately.');
+      failures.add(
+        '$path must keep publish_to: none until package publishing is enabled '
+        'deliberately.',
+      );
     }
   }
 
@@ -69,7 +72,9 @@ void main(List<String> arguments) {
     return;
   }
 
-  stdout.writeln('Release metadata is consistent for ${versions.values.single}.');
+  stdout.writeln(
+    'Release metadata is consistent for ${versions.values.single}.',
+  );
 }
 
 Map<String, String> _topLevelFields(List<String> lines) {
@@ -84,7 +89,21 @@ Map<String, String> _topLevelFields(List<String> lines) {
     }
     final key = line.substring(0, separator).trim();
     final value = line.substring(separator + 1).trim();
-    result[key] = value.replaceAll(RegExp(r'^["\']|["\']$'), '');
+    result[key] = _unquote(value);
   }
   return result;
+}
+
+String _unquote(String value) {
+  if (value.length < 2) {
+    return value;
+  }
+  final first = value[0];
+  final last = value[value.length - 1];
+  final doubleQuoted = first == '"' && last == '"';
+  final singleQuoted = first == "'" && last == "'";
+  if (doubleQuoted || singleQuoted) {
+    return value.substring(1, value.length - 1);
+  }
+  return value;
 }
