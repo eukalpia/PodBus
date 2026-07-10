@@ -1,0 +1,40 @@
+name: Diagnose production foundation
+
+on:
+  push:
+    branches:
+      - agent-production-foundation
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent-production-foundation
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: 3.12.0
+      - name: Resolve dependencies
+        run: dart pub get
+      - name: Capture diagnostics
+        run: |
+          mkdir -p .ci
+          set +e
+          dart analyze . > .ci/analyze.txt 2>&1
+          echo $? > .ci/analyze.exit
+          dart test packages/podbus_core/test packages/podbus_nats/test packages/podbus_rabbitmq/test packages/podbus_kafka/test packages/podbus_serverpod/test --exclude-tags=integration > .ci/unit-tests.txt 2>&1
+          echo $? > .ci/unit-tests.exit
+          exit 0
+      - name: Commit diagnostics
+        run: |
+          rm .github/workflows/diagnose-branch.yml
+          git config user.name "PodBus Automation"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "Capture CI diagnostics"
+          git push
