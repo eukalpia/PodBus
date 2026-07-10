@@ -120,12 +120,19 @@ final class DartKafkaAdapter implements KafkaAdapter {
       throw StateError('Kafka adapter is not connected.');
     }
     producer.produce(topic: topic, payload: bytes, key: key);
+    final config = _config;
+    if (config?.flushAfterProduce ?? true) {
+      producer.flush(config?.requestTimeout ?? const Duration(seconds: 10));
+    }
   }
 
   Map<String, String> _producerProperties(KafkaMessagingConfig config) {
     return {
       'bootstrap.servers': config.brokers.join(','),
       'client.id': config.clientId,
+      'enable.idempotence': 'true',
+      'acks': 'all',
+      ...config.producerProperties,
     };
   }
 
@@ -140,6 +147,7 @@ final class DartKafkaAdapter implements KafkaAdapter {
       'enable.auto.commit': 'false',
       'enable.auto.offset.store': 'false',
       'auto.offset.reset': 'earliest',
+      ...config.consumerProperties,
     };
   }
 }

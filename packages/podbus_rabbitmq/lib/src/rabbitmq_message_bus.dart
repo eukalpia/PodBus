@@ -11,31 +11,34 @@ import 'rabbitmq_adapter.dart';
 final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
   RabbitMqMessageBus({
     required this.config,
+    MessagingConfig? messagingConfig,
     RabbitMqAdapter? adapter,
     MessageCodec? codec,
     IdempotencyStore? idempotencyStore,
     Duration idempotencyTtl = const Duration(hours: 24),
-  }) : _adapter = adapter ?? DartRabbitMqAdapter(),
-       _codec = codec ?? const JsonMessageCodec(),
-       _idempotencyStore = idempotencyStore,
+  }) : messagingConfig = messagingConfig ?? MessagingConfig(codec: codec),
+       _adapter = adapter ?? DartRabbitMqAdapter(),
+       _idempotencyStore =
+           idempotencyStore ?? messagingConfig?.idempotencyStore,
        _idempotencyTtl = idempotencyTtl;
 
-  static const _contentTypeHeader = 'podbus-content-type';
-  static const _schemaVersionHeader = 'podbus-schema-version';
-  static const _deadLetterSourceHeader = 'podbus-dead-letter-source';
-  static const _deadLetterErrorHeader = 'podbus-dead-letter-error';
-  static const _deadLetterStackTraceHeader = 'podbus-dead-letter-stack-trace';
-  static const _retryMaxAttemptsHeader = 'podbus-retry-max-attempts';
-  static const _retryInitialDelayMicrosHeader =
-      'podbus-retry-initial-delay-micros';
-  static const _retryMaxDelayMicrosHeader = 'podbus-retry-max-delay-micros';
-  static const _retryBackoffMultiplierHeader =
-      'podbus-retry-backoff-multiplier';
-  static const _retryJitterHeader = 'podbus-retry-jitter';
+  static const _capabilities = MessagingCapabilities({
+    MessagingCapability.publishSubscribe,
+    MessagingCapability.queueGroups,
+    MessagingCapability.manualAcknowledgement,
+    MessagingCapability.negativeAcknowledgement,
+    MessagingCapability.termination,
+    MessagingCapability.durableJobs,
+    MessagingCapability.retries,
+    MessagingCapability.deadLettering,
+    MessagingCapability.idempotentPublish,
+    MessagingCapability.typedPayloads,
+    MessagingCapability.gracefulShutdown,
+  });
 
   final RabbitMqMessagingConfig config;
+  final MessagingConfig messagingConfig;
   final RabbitMqAdapter _adapter;
-  final MessageCodec _codec;
   final IdempotencyStore? _idempotencyStore;
   final Duration _idempotencyTtl;
   final List<_RabbitMqSubscription> _subscriptions = [];
@@ -43,38 +46,72 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
   Object? _lastWorkerError;
   DateTime? _lastWorkerErrorAt;
   var _connected = false;
+  var _closing = false;
+
+  MessageCodec get _codec => messagingConfig.codec;
+
+  @override
+  MessagingCapabilities get capabilities => _capabilities;
 
   @override
   Future<void> connect() async {
-    await _adapter.connect(config);
-    await _adapter.declareExchange(
-      name: config.exchange,
-      durable: config.durable,
-    );
-    await _adapter.declareExchange(
-      name: config.deadLetterExchange,
-      durable: config.durable,
-    );
-    _connected = true;
+    _closing = false;
+    try {
+      await _adapter.connect(config);
+      await _adapter.declareExchange(
+        name: config.exchange,
+        durable: config.durable,
+      );
+      await _adapter.declareExchange(
+        name: config.deadLetterExchange,
+        durable: config.durable,
+      );
+      _connected = true;
+    } on Object catch (error, stackTrace) {
+      try {
+        await _adapter.close();
+      } on Object {
+        // Preserve the startup failure.
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    }
   }
 
   @override
   Future<void> close({Duration? timeout}) async {
+    if (_closing) {
+      return;
+    }
+    _closing = true;
     _connected = false;
+    final effectiveTimeout = timeout ?? messagingConfig.shutdownTimeout;
+    Object? failure;
+    StackTrace? failureStackTrace;
 
-    final futures = [
-      for (final subscription in _subscriptions.toList()) subscription.close(),
-      for (final worker in _workers.toList()) worker.close(),
-    ];
-    if (timeout == null) {
-      await Future.wait(futures);
-    } else {
-      await Future.wait(futures).timeout(timeout);
+    try {
+      await Future.wait([
+        for (final subscription in _subscriptions.toList())
+          subscription.close(),
+        for (final worker in _workers.toList()) worker.close(),
+      ]).timeout(effectiveTimeout);
+      _subscriptions.clear();
+      _workers.clear();
+    } on Object catch (error, stackTrace) {
+      failure = error;
+      failureStackTrace = stackTrace;
+    } finally {
+      try {
+        await _adapter.close();
+      } on Object catch (error, stackTrace) {
+        failure ??= error;
+        failureStackTrace ??= stackTrace;
+      }
+      _closing = false;
     }
 
-    _subscriptions.clear();
-    _workers.clear();
-    await _adapter.close();
+    if (failure != null) {
+      Error.throwWithStackTrace(failure, failureStackTrace!);
+    }
   }
 
   @override
@@ -96,9 +133,15 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
   Future<Subscription> subscribe<T>(
     String subject, {
     String? queueGroup,
+    int concurrency = 1,
     required MessageHandler<T> handler,
   }) async {
     _ensureConnected();
+    if (concurrency < 1) {
+      throw const MessagingConfigurationException(
+        'Subscription concurrency must be greater than zero.',
+      );
+    }
 
     final queue = queueGroup == null
         ? _ephemeralQueueName(subject)
@@ -110,6 +153,8 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
     late final _RabbitMqSubscription subscription;
     subscription = _RabbitMqSubscription(
       consumer: consumer,
+      concurrency: concurrency,
+      messagingConfig: messagingConfig,
       onClose: () => _subscriptions.remove(subscription),
     );
     _subscriptions.add(subscription);
@@ -151,19 +196,27 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
       retryPolicy,
     );
     final key = idempotencyKey ?? effectiveHeaders.idempotencyKey;
+    var claimed = false;
     if (key != null && _idempotencyStore != null) {
-      final claimed = await _idempotencyStore.claim(key, ttl: _idempotencyTtl);
+      claimed = await _idempotencyStore.claim(key, ttl: _idempotencyTtl);
       if (!claimed) {
         return;
       }
     }
 
-    await _publishEncoded(
-      exchange: config.exchange,
-      routingKey: topic,
-      payload: payload,
-      headers: effectiveHeaders,
-    );
+    try {
+      await _publishEncoded(
+        exchange: config.exchange,
+        routingKey: topic,
+        payload: payload,
+        headers: effectiveHeaders,
+      );
+    } on Object catch (error, stackTrace) {
+      if (claimed && key != null && _idempotencyStore != null) {
+        await _idempotencyStore.release(key);
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    }
   }
 
   @override
@@ -213,10 +266,10 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
     }
     final lastWorkerError = _lastWorkerError;
     if (lastWorkerError != null) {
-      return HealthCheckResult.unhealthy(
-        message: 'RabbitMQ worker failure handling failed.',
+      return HealthCheckResult.degraded(
+        message: 'RabbitMQ is connected, but worker failure handling failed.',
         details: {
-          'lastWorkerError': lastWorkerError.toString(),
+          'lastWorkerError': messagingConfig.limits.truncateError(lastWorkerError),
           if (_lastWorkerErrorAt != null)
             'lastWorkerErrorAt': _lastWorkerErrorAt!.toIso8601String(),
           'subscriptions': _subscriptions.length,
@@ -235,7 +288,7 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
 
   void _recordWorkerError(Object error) {
     _lastWorkerError = error;
-    _lastWorkerErrorAt = DateTime.now();
+    _lastWorkerErrorAt = messagingConfig.now();
   }
 
   Future<void> _handleEventDelivery<T>(
@@ -256,7 +309,14 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
       if (!context.completed) {
         await context.ack();
       }
-    } on Object {
+    } on Object catch (error, stackTrace) {
+      messagingConfig.log(
+        MessagingLogLevel.error,
+        'RabbitMQ event handler failed.',
+        error: error,
+        stackTrace: stackTrace,
+        attributes: {'transport': 'rabbitmq', 'subject': subject},
+      );
       if (context?.completed != true) {
         await delivery.nack(requeue: false);
       }
@@ -264,14 +324,17 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
   }
 
   Future<T> _decode<T>(RabbitMqDelivery delivery) {
+    messagingConfig.limits.validatePayload(delivery.bytes);
+    messagingConfig.limits.validateHeaders(delivery.headers);
     return _codec.decode<T>(
       EncodedMessage(
         bytes: delivery.bytes,
         contentType:
-            delivery.headers[_contentTypeHeader] ??
+            delivery.headers[PodBusWireHeaders.contentType] ??
             JsonMessageCodec.contentType,
         schemaVersion:
-            int.tryParse(delivery.headers[_schemaVersionHeader] ?? '') ?? 1,
+            int.tryParse(delivery.headers[PodBusWireHeaders.schemaVersion] ?? '') ?? 1,
+        messageType: delivery.headers[PodBusWireHeaders.messageType],
       ),
     );
   }
@@ -285,7 +348,8 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
     Object error,
     StackTrace stackTrace,
   ) async {
-    if (attempt < retryPolicy.maxAttempts) {
+    if (messagingConfig.shouldRetry(error) &&
+        attempt < retryPolicy.maxAttempts) {
       final delay = retryPolicy.delayForAttempt(attempt);
       if (delay > Duration.zero) {
         await Future<void>.delayed(delay);
@@ -344,25 +408,55 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
     StackTrace? stackTrace,
   }) async {
     final policy = worker.deadLetterPolicy;
+    if (!policy.enabled) {
+      return;
+    }
+
     final destination = policy.destination ?? '${worker.topic}.dead-letter';
-    final customHeaders = {
+    final customHeaders = <String, String>{
       ...headers.custom,
-      _deadLetterSourceHeader: worker.topic,
+      PodBusWireHeaders.deadLetterSource: worker.topic,
+      if (!policy.includeOriginalPayload)
+        PodBusWireHeaders.deadLetterPayloadOmitted: 'true',
       if (policy.includeErrorDetails && error != null)
-        _deadLetterErrorHeader: error.toString(),
+        PodBusWireHeaders.deadLetterError:
+            messagingConfig.limits.truncateError(error),
       if (policy.includeErrorDetails && stackTrace != null)
-        _deadLetterStackTraceHeader: stackTrace.toString(),
+        PodBusWireHeaders.deadLetterStackTrace:
+            messagingConfig.limits.truncateError(stackTrace),
     };
-    final deadLetterHeaders = headers.copyWith(custom: customHeaders);
+    final deadLetterHeaders = headers
+        .withoutIdempotencyKey()
+        .copyWith(custom: customHeaders);
+    final bytes = policy.includeOriginalPayload
+        ? delivery.bytes
+        : const <int>[];
+    final wireHeaders = <String, String>{
+      for (final MapEntry(:key, :value)
+          in deadLetterHeaders.toMap().entries)
+        if (value != null) key: value.toString(),
+      PodBusWireHeaders.contentType: policy.includeOriginalPayload
+          ? (delivery.headers[PodBusWireHeaders.contentType] ??
+                JsonMessageCodec.contentType)
+          : 'application/octet-stream',
+      PodBusWireHeaders.schemaVersion: policy.includeOriginalPayload
+          ? (delivery.headers[PodBusWireHeaders.schemaVersion] ?? '1')
+          : '1',
+      if (policy.includeOriginalPayload &&
+          delivery.headers[PodBusWireHeaders.messageType] != null)
+        PodBusWireHeaders.messageType:
+            delivery.headers[PodBusWireHeaders.messageType]!,
+    };
+
     await _publishRaw(
       exchange: config.deadLetterExchange,
       routingKey: destination,
-      bytes: delivery.bytes,
-      headers: {
-        ...delivery.headers,
-        for (final MapEntry(:key, :value) in deadLetterHeaders.toMap().entries)
-          if (value != null) key: value.toString(),
-      },
+      bytes: bytes,
+      headers: wireHeaders,
+    );
+    messagingConfig.recordMetric(
+      'podbus.jobs.dead_lettered',
+      attributes: {'transport': 'rabbitmq', 'topic': worker.topic},
     );
   }
 
@@ -373,11 +467,21 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
     required MessageHeaders headers,
   }) async {
     final encoded = await _codec.encode(payload);
+    final wireHeaders = _headersFor(headers, encoded);
+    messagingConfig.validateRawOutbound(encoded.bytes, wireHeaders);
     await _publishRaw(
       exchange: exchange,
       routingKey: routingKey,
       bytes: encoded.bytes,
-      headers: _headersFor(headers, encoded),
+      headers: wireHeaders,
+    );
+    messagingConfig.recordMetric(
+      'podbus.messages.published',
+      attributes: {
+        'transport': 'rabbitmq',
+        'exchange': exchange,
+        'routingKey': routingKey,
+      },
     );
   }
 
@@ -387,6 +491,7 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
     required List<int> bytes,
     required Map<String, String> headers,
   }) {
+    messagingConfig.validateRawOutbound(bytes, headers);
     return _adapter.publish(
       exchange: exchange,
       routingKey: routingKey,
@@ -418,11 +523,7 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
   ) {
     return worker.retryPolicy ??
         _retryPolicyFromHeaders(headers) ??
-        RetryPolicy(
-          maxAttempts: 1,
-          initialDelay: Duration.zero,
-          maxDelay: Duration.zero,
-        );
+        messagingConfig.defaultRetryPolicy;
   }
 
   MessageHeaders _withRetryPolicy(
@@ -436,31 +537,31 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
     return headers.copyWith(
       custom: {
         ...headers.custom,
-        _retryMaxAttemptsHeader: retryPolicy.maxAttempts.toString(),
-        _retryInitialDelayMicrosHeader: retryPolicy.initialDelay.inMicroseconds
+        PodBusWireHeaders.retryMaxAttempts: retryPolicy.maxAttempts.toString(),
+        PodBusWireHeaders.retryInitialDelayMicros: retryPolicy.initialDelay.inMicroseconds
             .toString(),
-        _retryMaxDelayMicrosHeader: retryPolicy.maxDelay.inMicroseconds
+        PodBusWireHeaders.retryMaxDelayMicros: retryPolicy.maxDelay.inMicroseconds
             .toString(),
-        _retryBackoffMultiplierHeader: retryPolicy.backoffMultiplier.toString(),
-        _retryJitterHeader: retryPolicy.jitter.toString(),
+        PodBusWireHeaders.retryBackoffMultiplier: retryPolicy.backoffMultiplier.toString(),
+        PodBusWireHeaders.retryJitter: retryPolicy.jitter.toString(),
       },
     );
   }
 
   RetryPolicy? _retryPolicyFromHeaders(MessageHeaders headers) {
     final maxAttempts = int.tryParse(
-      headers.custom[_retryMaxAttemptsHeader] ?? '',
+      headers.custom[PodBusWireHeaders.retryMaxAttempts] ?? '',
     );
     final initialDelayMicros = int.tryParse(
-      headers.custom[_retryInitialDelayMicrosHeader] ?? '',
+      headers.custom[PodBusWireHeaders.retryInitialDelayMicros] ?? '',
     );
     final maxDelayMicros = int.tryParse(
-      headers.custom[_retryMaxDelayMicrosHeader] ?? '',
+      headers.custom[PodBusWireHeaders.retryMaxDelayMicros] ?? '',
     );
     final backoffMultiplier = double.tryParse(
-      headers.custom[_retryBackoffMultiplierHeader] ?? '',
+      headers.custom[PodBusWireHeaders.retryBackoffMultiplier] ?? '',
     );
-    final jitter = double.tryParse(headers.custom[_retryJitterHeader] ?? '');
+    final jitter = double.tryParse(headers.custom[PodBusWireHeaders.retryJitter] ?? '');
 
     if (maxAttempts == null ||
         initialDelayMicros == null ||
@@ -484,8 +585,10 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
     return {
       for (final MapEntry(:key, :value) in headers.toMap().entries)
         if (value != null) key: value.toString(),
-      _contentTypeHeader: encoded.contentType,
-      _schemaVersionHeader: encoded.schemaVersion.toString(),
+      PodBusWireHeaders.contentType: encoded.contentType,
+      PodBusWireHeaders.schemaVersion: encoded.schemaVersion.toString(),
+      if (encoded.messageType != null)
+        PodBusWireHeaders.messageType: encoded.messageType!,
     };
   }
 
@@ -500,7 +603,7 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
     return _namedQueue(
       'events',
       subject,
-      DateTime.now().microsecondsSinceEpoch.toString(),
+      messagingConfig.now().microsecondsSinceEpoch.toString(),
     );
   }
 
@@ -512,18 +615,21 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
 
   String _sanitize(String value) {
     final buffer = StringBuffer();
+    var hash = 0x811c9dc5;
     for (final unit in value.codeUnits) {
+      hash ^= unit;
+      hash = (hash * 0x01000193) & 0xffffffff;
       final allowed =
           (unit >= 48 && unit <= 57) ||
           (unit >= 65 && unit <= 90) ||
           (unit >= 97 && unit <= 122);
       buffer.write(allowed ? String.fromCharCode(unit) : '_');
     }
-    return buffer.toString();
+    return '${buffer}_h${hash.toRadixString(16).padLeft(8, '0')}';
   }
 
   void _ensureConnected() {
-    if (!_connected) {
+    if (!_connected || _closing || !_adapter.isConnected) {
       throw const MessagingConnectionException(
         'RabbitMQ adapter is not connected.',
       );
@@ -531,7 +637,7 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
   }
 
   void _ensureSchedulable(DateTime? runAt) {
-    if (runAt == null || !runAt.isAfter(DateTime.now())) {
+    if (runAt == null || !runAt.isAfter(messagingConfig.now())) {
       return;
     }
     throw const MessagingUnsupportedException(
@@ -541,17 +647,65 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
 }
 
 final class _RabbitMqSubscription implements Subscription {
-  _RabbitMqSubscription({required this.consumer, required this.onClose});
+  _RabbitMqSubscription({
+    required this.consumer,
+    required this.concurrency,
+    required this.messagingConfig,
+    required this.onClose,
+  });
 
   final RabbitMqConsumer consumer;
+  final int concurrency;
+  final MessagingConfig messagingConfig;
   final void Function() onClose;
+  final Queue<RabbitMqDelivery> _pending = Queue();
+  final Set<Future<void>> _active = {};
   StreamSubscription<RabbitMqDelivery>? _subscription;
   var _closed = false;
 
   void listen(Future<void> Function(RabbitMqDelivery delivery) onDelivery) {
-    _subscription = consumer.deliveries.listen((delivery) {
-      unawaited(onDelivery(delivery));
-    });
+    _subscription = consumer.deliveries.listen(
+      (delivery) {
+        if (_closed) {
+          unawaited(delivery.nack(requeue: true));
+          return;
+        }
+        _pending.add(delivery);
+        _drain(onDelivery);
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        messagingConfig.log(
+          MessagingLogLevel.error,
+          'RabbitMQ subscription stream failed.',
+          error: error,
+          stackTrace: stackTrace,
+          attributes: {'transport': 'rabbitmq'},
+        );
+      },
+    );
+  }
+
+  void _drain(Future<void> Function(RabbitMqDelivery delivery) onDelivery) {
+    while (!_closed && _active.length < concurrency && _pending.isNotEmpty) {
+      final delivery = _pending.removeFirst();
+      late final Future<void> task;
+      task = Future<void>.sync(() => onDelivery(delivery)).then<void>(
+        (_) {},
+        onError: (Object error, StackTrace stackTrace) {
+          messagingConfig.log(
+            MessagingLogLevel.error,
+            'RabbitMQ subscription handler failed.',
+            error: error,
+            stackTrace: stackTrace,
+            attributes: {'transport': 'rabbitmq'},
+          );
+        },
+      ).whenComplete(() {
+        _active.remove(task);
+        _drain(onDelivery);
+      });
+      _active.add(task);
+    }
   }
 
   @override
@@ -561,6 +715,14 @@ final class _RabbitMqSubscription implements Subscription {
     }
     _closed = true;
     await _subscription?.cancel();
+    while (_pending.isNotEmpty) {
+      await _pending.removeFirst().nack(requeue: true);
+    }
+    if (_active.isNotEmpty) {
+      await Future.wait(_active.toList()).timeout(
+        messagingConfig.shutdownTimeout,
+      );
+    }
     await consumer.close();
     onClose();
   }
@@ -587,22 +749,42 @@ final class _RabbitMqWorker<T> implements Worker {
   final JobHandler<T> handler;
   final void Function(_RabbitMqWorker<Object?> worker) onClose;
   final Queue<RabbitMqDelivery> _pending = Queue();
+  final Set<Future<void>> _tasks = {};
   StreamSubscription<RabbitMqDelivery>? _subscription;
-  var _active = 0;
   var _closed = false;
 
   void start() {
-    _subscription = consumer.deliveries.listen((delivery) {
-      _pending.add(delivery);
-      _drain();
-    });
+    _subscription = consumer.deliveries.listen(
+      (delivery) {
+        if (_closed) {
+          unawaited(delivery.nack(requeue: true));
+          return;
+        }
+        _pending.add(delivery);
+        _drain();
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        bus._recordWorkerError(error);
+        bus.messagingConfig.log(
+          MessagingLogLevel.error,
+          'RabbitMQ worker stream failed.',
+          error: error,
+          stackTrace: stackTrace,
+          attributes: {'transport': 'rabbitmq', 'topic': topic},
+        );
+      },
+    );
   }
 
   void _drain() {
-    while (!_closed && _active < concurrency && _pending.isNotEmpty) {
+    while (!_closed && _tasks.length < concurrency && _pending.isNotEmpty) {
       final delivery = _pending.removeFirst();
-      _active += 1;
-      unawaited(_process(delivery));
+      late final Future<void> task;
+      task = _process(delivery).whenComplete(() {
+        _tasks.remove(task);
+        _drain();
+      });
+      _tasks.add(task);
     }
   }
 
@@ -630,6 +812,10 @@ final class _RabbitMqWorker<T> implements Worker {
       if (!context.completed) {
         await context.ack();
       }
+      bus.messagingConfig.recordMetric(
+        'podbus.jobs.completed',
+        attributes: {'transport': 'rabbitmq', 'topic': topic},
+      );
     } on Object catch (error, stackTrace) {
       try {
         final parsedHeaders = headers;
@@ -652,12 +838,16 @@ final class _RabbitMqWorker<T> implements Worker {
             stackTrace,
           );
         }
-      } on Object catch (failureError) {
+      } on Object catch (failureError, failureStackTrace) {
         bus._recordWorkerError(failureError);
+        bus.messagingConfig.log(
+          MessagingLogLevel.error,
+          'RabbitMQ worker failure handling failed.',
+          error: failureError,
+          stackTrace: failureStackTrace,
+          attributes: {'transport': 'rabbitmq', 'topic': topic},
+        );
       }
-    } finally {
-      _active -= 1;
-      _drain();
     }
   }
 
@@ -668,6 +858,14 @@ final class _RabbitMqWorker<T> implements Worker {
     }
     _closed = true;
     await _subscription?.cancel();
+    while (_pending.isNotEmpty) {
+      await _pending.removeFirst().nack(requeue: true);
+    }
+    if (_tasks.isNotEmpty) {
+      await Future.wait(_tasks.toList()).timeout(
+        bus.messagingConfig.shutdownTimeout,
+      );
+    }
     await consumer.close();
     onClose(this as _RabbitMqWorker<Object?>);
   }

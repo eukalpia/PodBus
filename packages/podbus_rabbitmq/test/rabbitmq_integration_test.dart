@@ -78,6 +78,7 @@ void main() {
           enabled: true,
           destination: deadTopic,
           includeErrorDetails: true,
+          includeOriginalPayload: true,
         ),
         handler: (_, _) async {
           throw StateError('smtp unavailable');

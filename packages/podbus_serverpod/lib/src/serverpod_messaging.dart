@@ -42,25 +42,83 @@ final class ServerpodMessaging<TSession> {
   final ServerpodSessionFactory<TSession> sessionFactory;
   final ServerpodSessionCloser<TSession>? _closeSession;
   final ServerpodMessagingLogger<TSession> _logger;
+  final List<Subscription> _subscriptions = [];
+  final List<Worker> _workers = [];
+  var _started = false;
 
   Future<void> start() async {
+    if (_started) {
+      return;
+    }
     await bus.connect();
-    await queue.connect();
+    try {
+      await queue.connect();
+      _started = true;
+    } on Object catch (error, stackTrace) {
+      try {
+        await bus.close();
+      } on Object {
+        // Preserve the queue startup failure.
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    }
   }
 
   Future<void> stop({Duration? timeout}) async {
-    await queue.close(timeout: timeout);
-    await bus.close(timeout: timeout);
+    if (!_started && _subscriptions.isEmpty && _workers.isEmpty) {
+      return;
+    }
+    _started = false;
+    Object? failure;
+    StackTrace? failureStackTrace;
+
+    for (final worker in _workers.toList()) {
+      try {
+        await worker.close();
+      } on Object catch (error, stackTrace) {
+        failure ??= error;
+        failureStackTrace ??= stackTrace;
+      }
+    }
+    _workers.clear();
+    for (final subscription in _subscriptions.toList()) {
+      try {
+        await subscription.close();
+      } on Object catch (error, stackTrace) {
+        failure ??= error;
+        failureStackTrace ??= stackTrace;
+      }
+    }
+    _subscriptions.clear();
+
+    try {
+      await queue.close(timeout: timeout);
+    } on Object catch (error, stackTrace) {
+      failure ??= error;
+      failureStackTrace ??= stackTrace;
+    }
+    try {
+      await bus.close(timeout: timeout);
+    } on Object catch (error, stackTrace) {
+      failure ??= error;
+      failureStackTrace ??= stackTrace;
+    }
+
+    if (failure != null) {
+      Error.throwWithStackTrace(failure, failureStackTrace!);
+    }
   }
 
   Future<Subscription> subscribe<TPayload>(
     String subject, {
     String? queueGroup,
+    int concurrency = 1,
     required ServerpodMessageHandler<TSession, TPayload> handler,
-  }) {
-    return bus.subscribe<TPayload>(
+  }) async {
+    final subscription = await bus.subscribe<TPayload>(
       subject,
       queueGroup: queueGroup,
+      concurrency: concurrency,
       handler: (context, payload) async {
         await _withSession(
           operation: 'message handler for $subject',
@@ -68,6 +126,8 @@ final class ServerpodMessaging<TSession> {
         );
       },
     );
+    _subscriptions.add(subscription);
+    return subscription;
   }
 
   Future<Worker> worker<TPayload>(
@@ -78,8 +138,8 @@ final class ServerpodMessaging<TSession> {
     RetryPolicy? retryPolicy,
     DeadLetterPolicy? deadLetterPolicy,
     required ServerpodJobHandler<TSession, TPayload> handler,
-  }) {
-    return queue.worker<TPayload>(
+  }) async {
+    final worker = await queue.worker<TPayload>(
       topic,
       queueGroup: queueGroup,
       durableName: durableName,
@@ -93,6 +153,8 @@ final class ServerpodMessaging<TSession> {
         );
       },
     );
+    _workers.add(worker);
+    return worker;
   }
 
   Future<void> _withSession({
@@ -134,10 +196,19 @@ final class ServerpodMessagingModule<TSession> {
       return;
     }
     await messaging.start();
-    for (final registration in registrations) {
-      await registration(messaging);
+    try {
+      for (final registration in registrations) {
+        await registration(messaging);
+      }
+      _started = true;
+    } on Object catch (error, stackTrace) {
+      try {
+        await messaging.stop();
+      } on Object {
+        // Preserve the registration failure.
+      }
+      Error.throwWithStackTrace(error, stackTrace);
     }
-    _started = true;
   }
 
   Future<void> stop({Duration? timeout}) async {

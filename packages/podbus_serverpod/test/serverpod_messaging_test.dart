@@ -148,6 +148,11 @@ final class ImmediateMessageBus implements MessageBus {
   var connected = false;
 
   @override
+  MessagingCapabilities get capabilities => const MessagingCapabilities({
+    MessagingCapability.publishSubscribe,
+  });
+
+  @override
   Future<void> close({Duration? timeout}) async {
     connected = false;
   }
@@ -185,6 +190,7 @@ final class ImmediateMessageBus implements MessageBus {
   Future<Subscription> subscribe<T>(
     String subject, {
     String? queueGroup,
+    int concurrency = 1,
     required MessageHandler<T> handler,
   }) async {
     await handler(_ImmediateMessageContext(subject), <String, Object?>{} as T);
