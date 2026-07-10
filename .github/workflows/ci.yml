@@ -84,7 +84,7 @@ jobs:
       - name: Start NATS
         run: docker compose -f docker-compose.integration.yaml up -d nats
       - name: Wait for NATS readiness
-        run: tool/ci/wait_for_nats.sh
+        run: bash tool/ci/wait_for_nats.sh
       - name: Run NATS integration tests
         env:
           PODBUS_RUN_INTEGRATION_TESTS: "true"
@@ -126,7 +126,7 @@ jobs:
       - name: Start RabbitMQ
         run: docker compose -f docker-compose.integration.yaml up -d rabbitmq
       - name: Wait for RabbitMQ readiness
-        run: tool/ci/wait_for_rabbitmq.sh
+        run: bash tool/ci/wait_for_rabbitmq.sh
       - name: Run RabbitMQ integration tests
         env:
           PODBUS_RUN_INTEGRATION_TESTS: "true"
@@ -169,7 +169,7 @@ jobs:
       - name: Start Kafka
         run: docker compose -f docker-compose.integration.yaml up -d kafka
       - name: Wait for Kafka readiness
-        run: tool/ci/wait_for_kafka.sh
+        run: bash tool/ci/wait_for_kafka.sh
       - name: Run Kafka integration tests
         env:
           PODBUS_RUN_INTEGRATION_TESTS: "true"
