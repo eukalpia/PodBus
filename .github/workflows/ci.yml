@@ -74,6 +74,7 @@ jobs:
           packages/podbus_nats/test
           packages/podbus_rabbitmq/test
           packages/podbus_kafka/test
+          packages/podbus_postgres/test
           packages/podbus_serverpod/test
           --exclude-tags=integration
           --coverage=coverage
@@ -187,7 +188,7 @@ jobs:
         run: dart pub get
       - name: Start Kafka
         run: docker compose -f docker-compose.integration.yaml up -d kafka
-      - name: Wait for Kafka readiness
+      - name: Wait for Kafka readiness and provision topic
         run: bash tool/ci/wait_for_kafka.sh
       - name: Run Kafka integration tests
         env:
@@ -212,5 +213,48 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Stop Kafka
+        if: always()
+        run: docker compose -f docker-compose.integration.yaml down -v
+
+  postgres-integration:
+    name: PostgreSQL reliability integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
+        with:
+          sdk: ${{ env.DART_SDK }}
+      - name: Resolve dependencies
+        run: dart pub get
+      - name: Start PostgreSQL
+        run: docker compose -f docker-compose.integration.yaml up -d postgres
+      - name: Wait for PostgreSQL readiness
+        run: >-
+          docker compose -f docker-compose.integration.yaml exec -T postgres
+          sh -c 'until pg_isready -U podbus -d podbus; do sleep 1; done'
+      - name: Run PostgreSQL reliability tests
+        env:
+          PODBUS_RUN_INTEGRATION_TESTS: "true"
+        run: >-
+          dart test
+          packages/podbus_postgres/test/postgres_integration_test.dart
+          --tags=integration
+          --reporter=expanded
+          --file-reporter=json:test-results-postgres.json
+      - name: Capture PostgreSQL logs
+        if: always()
+        run: docker compose -f docker-compose.integration.yaml logs --no-color postgres > postgres.log
+      - name: Upload PostgreSQL diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: postgres-integration-diagnostics
+          path: |
+            test-results-postgres.json
+            postgres.log
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Stop PostgreSQL
         if: always()
         run: docker compose -f docker-compose.integration.yaml down -v
