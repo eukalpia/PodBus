@@ -75,6 +75,7 @@ jobs:
           packages/podbus_rabbitmq/test
           packages/podbus_kafka/test
           packages/podbus_postgres/test
+          packages/podbus_observability/test
           packages/podbus_serverpod/test
           --exclude-tags=integration
           --coverage=coverage
@@ -258,3 +259,30 @@ jobs:
       - name: Stop PostgreSQL
         if: always()
         run: docker compose -f docker-compose.integration.yaml down -v
+
+  production-gate:
+    name: Production gate
+    if: always()
+    needs:
+      - quality
+      - unit-tests
+      - nats-integration
+      - rabbitmq-integration
+      - kafka-integration
+      - postgres-integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify required checks
+        env:
+          QUALITY: ${{ needs.quality.result }}
+          UNIT: ${{ needs.unit-tests.result }}
+          NATS: ${{ needs.nats-integration.result }}
+          RABBITMQ: ${{ needs.rabbitmq-integration.result }}
+          KAFKA: ${{ needs.kafka-integration.result }}
+          POSTGRES: ${{ needs.postgres-integration.result }}
+        run: |
+          set -euo pipefail
+          for result in "$QUALITY" "$UNIT" "$NATS" "$RABBITMQ" "$KAFKA" "$POSTGRES"; do
+            test "$result" = success
+          done
