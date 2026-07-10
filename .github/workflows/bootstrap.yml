@@ -3,7 +3,7 @@ name: Complete production foundation
 on:
   push:
     branches:
-      - agent/production-foundation
+      - agent-production-foundation
 
 permissions:
   contents: write
@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: agent/production-foundation
+          ref: agent-production-foundation
       - name: Assemble transport changes
         run: |
           cat .bootstrap/payload.part* | base64 --decode > /tmp/podbus-remaining.tar.gz
