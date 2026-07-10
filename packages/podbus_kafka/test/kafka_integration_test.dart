@@ -10,7 +10,7 @@ void main() {
     () {
       test('produces and consumes an event through a consumer group', () async {
         final id = DateTime.now().microsecondsSinceEpoch;
-        final topic = 'podbus.tests.kafka.events.$id';
+        const topic = 'podbus.tests.kafka.events';
         final bus = KafkaEventBus(
           config: KafkaMessagingConfig(
             brokers: [
@@ -28,13 +28,16 @@ void main() {
         await bus.subscribe<Map<String, Object?>>(
           topic,
           handler: (_, payload) async {
-            received.complete(payload);
+            if (payload['testId'] == id && !received.isCompleted) {
+              received.complete(payload);
+            }
           },
         );
 
-        await bus.publish(topic, {'leadId': 42});
+        await bus.publish(topic, {'testId': id, 'leadId': 42});
 
         expect(await received.future.timeout(_integrationTimeout), {
+          'testId': id,
           'leadId': 42,
         });
       });
