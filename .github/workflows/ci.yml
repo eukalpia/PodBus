@@ -80,6 +80,8 @@ jobs:
           --exclude-tags=integration
           --coverage=coverage
           --file-reporter=json:test-results/unit.json
+      - name: Check coverage floor
+        run: dart run tool/check_coverage.dart --directory coverage --minimum 45
       - name: Upload unit-test diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
