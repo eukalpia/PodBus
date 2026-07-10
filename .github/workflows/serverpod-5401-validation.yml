@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/serverpod-5401-validation-ci
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
