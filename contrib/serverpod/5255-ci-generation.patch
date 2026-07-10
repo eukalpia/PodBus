@@ -1,0 +1,64 @@
+diff --git a/.github/workflows/dart-tests.yaml b/.github/workflows/dart-tests.yaml
+--- a/.github/workflows/dart-tests.yaml
++++ b/.github/workflows/dart-tests.yaml
+@@ -134,13 +134,6 @@ jobs:
+         run: |
+           git config core.safecrlf false
+           util/run_tests_serverpod_generate
+-      - name: Verify generate from scratch
+-        shell: bash
+-        run: |
+-          rm -rf tests/serverpod_test_server/lib/src/generated
+-          export SERVERPOD_HOME=$(pwd)
+-          cd tests/serverpod_test_server
+-          dart run "$SERVERPOD_HOME/tools/serverpod_cli/bin/serverpod_cli.dart" generate --no-analytics
+ 
+   update_pubspecs:
+     name: update pubspecs
+diff --git a/util/run_tests_serverpod_generate b/util/run_tests_serverpod_generate
+--- a/util/run_tests_serverpod_generate
++++ b/util/run_tests_serverpod_generate
+@@ -1,8 +1,14 @@
+ #!/bin/bash
+ 
++if [ ! -f util/.serverpod_util_root ]; then
++    echo "Run this script from the root of the Serverpod repository"
++    echo "I.e. util/run_tests_serverpod_generate"
++    exit 1
++fi
++
+ # Makes script exit on first non-zero error code
+-set -e
++set -euo pipefail
+ 
+ echo "### Run serverpod generate test"
+ echo "### If this test fails, make sure that you have run serverpod generate"
+@@ -14,19 +20,25 @@ echo "### Installing CLI tools"
+ 
+ export PATH="$PATH":"$HOME/.pub-cache/bin"
+ 
+-export SERVERPOD_HOME=$(pwd)
++export SERVERPOD_HOME="$(pwd)"
+ echo "### Serverpod home: $SERVERPOD_HOME"
+ 
+ # Verify that template directory exists
+ TEMPLATE_DIR="$SERVERPOD_HOME/templates/serverpod_templates"
+ echo "### Templates at: $TEMPLATE_DIR"
+-test -d $TEMPLATE_DIR
++test -d "$TEMPLATE_DIR"
+ 
+-cd tools/serverpod_cli
++cd "$SERVERPOD_HOME/tools/serverpod_cli"
+ dart pub global activate -s path .
+ 
+-cd $SERVERPOD_HOME
++cd "$SERVERPOD_HOME"
++
++GENERATED_DIR="$SERVERPOD_HOME/tests/serverpod_test_server/lib/src/generated"
++echo "### Removing generated test project code: $GENERATED_DIR"
++rm -rf "$GENERATED_DIR"
+ 
+ util/generate_all
+ 
++test -d "$GENERATED_DIR"
+ util/ensure_no_changes
