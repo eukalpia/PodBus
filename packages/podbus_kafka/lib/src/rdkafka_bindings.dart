@@ -8,10 +8,15 @@ const int rdKafkaPartitionUnassigned = -1;
 const int rdKafkaMessageCopy = 0x2;
 
 final class RdKafkaHandle extends ffi.Opaque {}
+
 final class RdKafkaConfig extends ffi.Opaque {}
+
 final class RdKafkaTopic extends ffi.Opaque {}
+
 final class RdKafkaTopicConfig extends ffi.Opaque {}
+
 final class RdKafkaTopicPartitionList extends ffi.Opaque {}
+
 final class RdKafkaTopicPartition extends ffi.Opaque {}
 
 final class RdKafkaMessage extends ffi.Struct {
@@ -62,42 +67,46 @@ final class RdkafkaBindings {
     ffi.Pointer<ffi.Char>,
     ffi.Pointer<ffi.Char>,
     int,
-  ) rdKafkaConfigSet = _library.lookupFunction<
-    ffi.Int32 Function(
-      ffi.Pointer<RdKafkaConfig>,
-      ffi.Pointer<ffi.Char>,
-      ffi.Pointer<ffi.Char>,
-      ffi.Pointer<ffi.Char>,
-      ffi.Size,
-    ),
-    int Function(
-      ffi.Pointer<RdKafkaConfig>,
-      ffi.Pointer<ffi.Char>,
-      ffi.Pointer<ffi.Char>,
-      ffi.Pointer<ffi.Char>,
-      int,
-    )
-  >('rd_kafka_conf_set');
+  )
+  rdKafkaConfigSet = _library
+      .lookupFunction<
+        ffi.Int32 Function(
+          ffi.Pointer<RdKafkaConfig>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Size,
+        ),
+        int Function(
+          ffi.Pointer<RdKafkaConfig>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          int,
+        )
+      >('rd_kafka_conf_set');
 
   late final ffi.Pointer<RdKafkaHandle> Function(
     int,
     ffi.Pointer<RdKafkaConfig>,
     ffi.Pointer<ffi.Char>,
     int,
-  ) rdKafkaNew = _library.lookupFunction<
-    ffi.Pointer<RdKafkaHandle> Function(
-      ffi.Int32,
-      ffi.Pointer<RdKafkaConfig>,
-      ffi.Pointer<ffi.Char>,
-      ffi.Size,
-    ),
-    ffi.Pointer<RdKafkaHandle> Function(
-      int,
-      ffi.Pointer<RdKafkaConfig>,
-      ffi.Pointer<ffi.Char>,
-      int,
-    )
-  >('rd_kafka_new');
+  )
+  rdKafkaNew = _library
+      .lookupFunction<
+        ffi.Pointer<RdKafkaHandle> Function(
+          ffi.Int32,
+          ffi.Pointer<RdKafkaConfig>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Size,
+        ),
+        ffi.Pointer<RdKafkaHandle> Function(
+          int,
+          ffi.Pointer<RdKafkaConfig>,
+          ffi.Pointer<ffi.Char>,
+          int,
+        )
+      >('rd_kafka_new');
 
   late final void Function(ffi.Pointer<RdKafkaHandle>) rdKafkaDestroy = _library
       .lookupFunction<
@@ -109,18 +118,20 @@ final class RdkafkaBindings {
     ffi.Pointer<RdKafkaHandle>,
     ffi.Pointer<ffi.Char>,
     ffi.Pointer<RdKafkaTopicConfig>,
-  ) rdKafkaTopicNew = _library.lookupFunction<
-    ffi.Pointer<RdKafkaTopic> Function(
-      ffi.Pointer<RdKafkaHandle>,
-      ffi.Pointer<ffi.Char>,
-      ffi.Pointer<RdKafkaTopicConfig>,
-    ),
-    ffi.Pointer<RdKafkaTopic> Function(
-      ffi.Pointer<RdKafkaHandle>,
-      ffi.Pointer<ffi.Char>,
-      ffi.Pointer<RdKafkaTopicConfig>,
-    )
-  >('rd_kafka_topic_new');
+  )
+  rdKafkaTopicNew = _library
+      .lookupFunction<
+        ffi.Pointer<RdKafkaTopic> Function(
+          ffi.Pointer<RdKafkaHandle>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<RdKafkaTopicConfig>,
+        ),
+        ffi.Pointer<RdKafkaTopic> Function(
+          ffi.Pointer<RdKafkaHandle>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<RdKafkaTopicConfig>,
+        )
+      >('rd_kafka_topic_new');
 
   late final void Function(ffi.Pointer<RdKafkaTopic>) rdKafkaTopicDestroy =
       _library.lookupFunction<
@@ -129,10 +140,11 @@ final class RdkafkaBindings {
       >('rd_kafka_topic_destroy');
 
   late final ffi.Pointer<ffi.Char> Function(ffi.Pointer<RdKafkaTopic>)
-  rdKafkaTopicName = _library.lookupFunction<
-    ffi.Pointer<ffi.Char> Function(ffi.Pointer<RdKafkaTopic>),
-    ffi.Pointer<ffi.Char> Function(ffi.Pointer<RdKafkaTopic>)
-  >('rd_kafka_topic_name');
+  rdKafkaTopicName = _library
+      .lookupFunction<
+        ffi.Pointer<ffi.Char> Function(ffi.Pointer<RdKafkaTopic>),
+        ffi.Pointer<ffi.Char> Function(ffi.Pointer<RdKafkaTopic>)
+      >('rd_kafka_topic_name');
 
   late final int Function(
     ffi.Pointer<RdKafkaTopic>,
@@ -143,31 +155,33 @@ final class RdkafkaBindings {
     ffi.Pointer<ffi.Void>,
     int,
     ffi.Pointer<ffi.Void>,
-  ) rdKafkaProduce = _library.lookupFunction<
-    ffi.Int Function(
-      ffi.Pointer<RdKafkaTopic>,
-      ffi.Int32,
-      ffi.Int,
-      ffi.Pointer<ffi.Void>,
-      ffi.Size,
-      ffi.Pointer<ffi.Void>,
-      ffi.Size,
-      ffi.Pointer<ffi.Void>,
-    ),
-    int Function(
-      ffi.Pointer<RdKafkaTopic>,
-      int,
-      int,
-      ffi.Pointer<ffi.Void>,
-      int,
-      ffi.Pointer<ffi.Void>,
-      int,
-      ffi.Pointer<ffi.Void>,
-    )
-  >('rd_kafka_produce');
-
-  late final int Function(ffi.Pointer<RdKafkaHandle>, int) rdKafkaPoll = _library
+  )
+  rdKafkaProduce = _library
       .lookupFunction<
+        ffi.Int Function(
+          ffi.Pointer<RdKafkaTopic>,
+          ffi.Int32,
+          ffi.Int,
+          ffi.Pointer<ffi.Void>,
+          ffi.Size,
+          ffi.Pointer<ffi.Void>,
+          ffi.Size,
+          ffi.Pointer<ffi.Void>,
+        ),
+        int Function(
+          ffi.Pointer<RdKafkaTopic>,
+          int,
+          int,
+          ffi.Pointer<ffi.Void>,
+          int,
+          ffi.Pointer<ffi.Void>,
+          int,
+          ffi.Pointer<ffi.Void>,
+        )
+      >('rd_kafka_produce');
+
+  late final int Function(ffi.Pointer<RdKafkaHandle>, int) rdKafkaPoll =
+      _library.lookupFunction<
         ffi.Int Function(ffi.Pointer<RdKafkaHandle>, ffi.Int),
         int Function(ffi.Pointer<RdKafkaHandle>, int)
       >('rd_kafka_poll');
@@ -185,47 +199,53 @@ final class RdkafkaBindings {
       >('rd_kafka_poll_set_consumer');
 
   late final ffi.Pointer<RdKafkaTopicPartitionList> Function(int)
-  rdKafkaTopicPartitionListNew = _library.lookupFunction<
-    ffi.Pointer<RdKafkaTopicPartitionList> Function(ffi.Int),
-    ffi.Pointer<RdKafkaTopicPartitionList> Function(int)
-  >('rd_kafka_topic_partition_list_new');
+  rdKafkaTopicPartitionListNew = _library
+      .lookupFunction<
+        ffi.Pointer<RdKafkaTopicPartitionList> Function(ffi.Int),
+        ffi.Pointer<RdKafkaTopicPartitionList> Function(int)
+      >('rd_kafka_topic_partition_list_new');
 
   late final ffi.Pointer<RdKafkaTopicPartition> Function(
     ffi.Pointer<RdKafkaTopicPartitionList>,
     ffi.Pointer<ffi.Char>,
     int,
-  ) rdKafkaTopicPartitionListAdd = _library.lookupFunction<
-    ffi.Pointer<RdKafkaTopicPartition> Function(
-      ffi.Pointer<RdKafkaTopicPartitionList>,
-      ffi.Pointer<ffi.Char>,
-      ffi.Int32,
-    ),
-    ffi.Pointer<RdKafkaTopicPartition> Function(
-      ffi.Pointer<RdKafkaTopicPartitionList>,
-      ffi.Pointer<ffi.Char>,
-      int,
-    )
-  >('rd_kafka_topic_partition_list_add');
+  )
+  rdKafkaTopicPartitionListAdd = _library
+      .lookupFunction<
+        ffi.Pointer<RdKafkaTopicPartition> Function(
+          ffi.Pointer<RdKafkaTopicPartitionList>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Int32,
+        ),
+        ffi.Pointer<RdKafkaTopicPartition> Function(
+          ffi.Pointer<RdKafkaTopicPartitionList>,
+          ffi.Pointer<ffi.Char>,
+          int,
+        )
+      >('rd_kafka_topic_partition_list_add');
 
   late final void Function(ffi.Pointer<RdKafkaTopicPartitionList>)
-  rdKafkaTopicPartitionListDestroy = _library.lookupFunction<
-    ffi.Void Function(ffi.Pointer<RdKafkaTopicPartitionList>),
-    void Function(ffi.Pointer<RdKafkaTopicPartitionList>)
-  >('rd_kafka_topic_partition_list_destroy');
+  rdKafkaTopicPartitionListDestroy = _library
+      .lookupFunction<
+        ffi.Void Function(ffi.Pointer<RdKafkaTopicPartitionList>),
+        void Function(ffi.Pointer<RdKafkaTopicPartitionList>)
+      >('rd_kafka_topic_partition_list_destroy');
 
   late final int Function(
     ffi.Pointer<RdKafkaHandle>,
     ffi.Pointer<RdKafkaTopicPartitionList>,
-  ) rdKafkaSubscribe = _library.lookupFunction<
-    ffi.Int32 Function(
-      ffi.Pointer<RdKafkaHandle>,
-      ffi.Pointer<RdKafkaTopicPartitionList>,
-    ),
-    int Function(
-      ffi.Pointer<RdKafkaHandle>,
-      ffi.Pointer<RdKafkaTopicPartitionList>,
-    )
-  >('rd_kafka_subscribe');
+  )
+  rdKafkaSubscribe = _library
+      .lookupFunction<
+        ffi.Int32 Function(
+          ffi.Pointer<RdKafkaHandle>,
+          ffi.Pointer<RdKafkaTopicPartitionList>,
+        ),
+        int Function(
+          ffi.Pointer<RdKafkaHandle>,
+          ffi.Pointer<RdKafkaTopicPartitionList>,
+        )
+      >('rd_kafka_subscribe');
 
   late final int Function(ffi.Pointer<RdKafkaHandle>) rdKafkaUnsubscribe =
       _library.lookupFunction<
@@ -236,13 +256,15 @@ final class RdkafkaBindings {
   late final ffi.Pointer<RdKafkaMessage> Function(
     ffi.Pointer<RdKafkaHandle>,
     int,
-  ) rdKafkaConsumerPoll = _library.lookupFunction<
-    ffi.Pointer<RdKafkaMessage> Function(
-      ffi.Pointer<RdKafkaHandle>,
-      ffi.Int,
-    ),
-    ffi.Pointer<RdKafkaMessage> Function(ffi.Pointer<RdKafkaHandle>, int)
-  >('rd_kafka_consumer_poll');
+  )
+  rdKafkaConsumerPoll = _library
+      .lookupFunction<
+        ffi.Pointer<RdKafkaMessage> Function(
+          ffi.Pointer<RdKafkaHandle>,
+          ffi.Int,
+        ),
+        ffi.Pointer<RdKafkaMessage> Function(ffi.Pointer<RdKafkaHandle>, int)
+      >('rd_kafka_consumer_poll');
 
   late final void Function(ffi.Pointer<RdKafkaMessage>) rdKafkaMessageDestroy =
       _library.lookupFunction<
@@ -251,27 +273,30 @@ final class RdkafkaBindings {
       >('rd_kafka_message_destroy');
 
   late final ffi.Pointer<ffi.Char> Function(ffi.Pointer<RdKafkaMessage>)
-  rdKafkaMessageErrorString = _library.lookupFunction<
-    ffi.Pointer<ffi.Char> Function(ffi.Pointer<RdKafkaMessage>),
-    ffi.Pointer<ffi.Char> Function(ffi.Pointer<RdKafkaMessage>)
-  >('rd_kafka_message_errstr');
+  rdKafkaMessageErrorString = _library
+      .lookupFunction<
+        ffi.Pointer<ffi.Char> Function(ffi.Pointer<RdKafkaMessage>),
+        ffi.Pointer<ffi.Char> Function(ffi.Pointer<RdKafkaMessage>)
+      >('rd_kafka_message_errstr');
 
   late final int Function(
     ffi.Pointer<RdKafkaHandle>,
     ffi.Pointer<RdKafkaMessage>,
     int,
-  ) rdKafkaCommitMessage = _library.lookupFunction<
-    ffi.Int32 Function(
-      ffi.Pointer<RdKafkaHandle>,
-      ffi.Pointer<RdKafkaMessage>,
-      ffi.Int,
-    ),
-    int Function(
-      ffi.Pointer<RdKafkaHandle>,
-      ffi.Pointer<RdKafkaMessage>,
-      int,
-    )
-  >('rd_kafka_commit_message');
+  )
+  rdKafkaCommitMessage = _library
+      .lookupFunction<
+        ffi.Int32 Function(
+          ffi.Pointer<RdKafkaHandle>,
+          ffi.Pointer<RdKafkaMessage>,
+          ffi.Int,
+        ),
+        int Function(
+          ffi.Pointer<RdKafkaHandle>,
+          ffi.Pointer<RdKafkaMessage>,
+          int,
+        )
+      >('rd_kafka_commit_message');
 
   late final int Function(ffi.Pointer<RdKafkaHandle>) rdKafkaConsumerClose =
       _library.lookupFunction<

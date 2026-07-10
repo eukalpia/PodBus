@@ -404,11 +404,7 @@ List<int> _copyBytes(ffi.Pointer<ffi.Void> pointer, int length) {
   return pointer.cast<ffi.Uint8>().asTypedList(length).toList();
 }
 
-void _ensureNoError(
-  RdkafkaBindings bindings,
-  int result,
-  String message,
-) {
+void _ensureNoError(RdkafkaBindings bindings, int result, String message) {
   if (result == rdKafkaRespErrNoError) {
     return;
   }
