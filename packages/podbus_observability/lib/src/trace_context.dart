@@ -18,13 +18,9 @@ final class W3cTraceContext {
   final bool sampled;
   final String? traceState;
 
-  String get traceParent =>
-      '00-$traceId-$spanId-${sampled ? '01' : '00'}';
+  String get traceParent => '00-$traceId-$spanId-${sampled ? '01' : '00'}';
 
-  factory W3cTraceContext.root({
-    bool sampled = true,
-    Random? random,
-  }) {
+  factory W3cTraceContext.root({bool sampled = true, Random? random}) {
     final secure = random ?? Random.secure();
     return W3cTraceContext(
       traceId: _randomHex(16, secure),

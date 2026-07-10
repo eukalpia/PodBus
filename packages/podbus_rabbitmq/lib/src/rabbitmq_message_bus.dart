@@ -66,6 +66,12 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
         name: config.deadLetterExchange,
         durable: config.durable,
       );
+      if (config.useBrokerRetryQueues) {
+        await _adapter.declareExchange(
+          name: config.effectiveRetryExchange,
+          durable: config.durable,
+        );
+      }
       _connected = true;
     } on Object catch (error, stackTrace) {
       try {
@@ -146,7 +152,11 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
     final queue = queueGroup == null
         ? _ephemeralQueueName(subject)
         : _namedQueue('events', subject, queueGroup);
-    await _declareBoundQueue(queue: queue, routingKey: subject);
+    await _declareBoundQueue(
+      queue: queue,
+      routingKey: subject,
+      ephemeral: queueGroup == null,
+    );
     await _adapter.setPrefetchCount(config.prefetchCount);
     final consumer = await _adapter.consume(queue: queue, noAck: false);
 
@@ -356,15 +366,24 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
     if (messagingConfig.shouldRetry(error) &&
         attempt < retryPolicy.maxAttempts) {
       final delay = retryPolicy.delayForAttempt(attempt);
-      if (delay > Duration.zero) {
-        await Future<void>.delayed(delay);
+      if (config.useBrokerRetryQueues && delay > Duration.zero) {
+        await _publishRetry(
+          worker: worker,
+          delivery: delivery,
+          attempt: attempt + 1,
+          delay: delay,
+        );
+      } else {
+        if (delay > Duration.zero) {
+          await Future<void>.delayed(delay);
+        }
+        await _publishRaw(
+          exchange: config.exchange,
+          routingKey: worker.topic,
+          bytes: delivery.bytes,
+          headers: _rawHeadersWithAttempt(delivery.headers, attempt + 1),
+        );
       }
-      await _publishRaw(
-        exchange: config.exchange,
-        routingKey: worker.topic,
-        bytes: delivery.bytes,
-        headers: _rawHeadersWithAttempt(delivery.headers, attempt + 1),
-      );
       await delivery.ack();
       return;
     }
@@ -403,6 +422,45 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
     }
 
     await delivery.nack(requeue: false);
+  }
+
+  Future<void> _publishRetry({
+    required _RabbitMqWorker<Object?> worker,
+    required RabbitMqDelivery delivery,
+    required int attempt,
+    required Duration delay,
+  }) async {
+    final delayMs = delay.inMilliseconds.clamp(1, 2147483647).toInt();
+    final routingKey = '${worker.topic}.retry.$delayMs';
+    final queue = _namedQueue('retry', worker.topic, '${delayMs}ms');
+    await _adapter.declareQueue(
+      name: queue,
+      durable: config.durable,
+      arguments: {
+        'x-message-ttl': delayMs,
+        'x-dead-letter-exchange': config.exchange,
+        'x-dead-letter-routing-key': worker.topic,
+      },
+    );
+    await _adapter.bindQueue(
+      queue: queue,
+      exchange: config.effectiveRetryExchange,
+      routingKey: routingKey,
+    );
+    await _publishRaw(
+      exchange: config.effectiveRetryExchange,
+      routingKey: routingKey,
+      bytes: delivery.bytes,
+      headers: _rawHeadersWithAttempt(delivery.headers, attempt),
+    );
+    messagingConfig.recordMetric(
+      'podbus.jobs.retried',
+      attributes: {
+        'transport': 'rabbitmq',
+        'topic': worker.topic,
+        'delayMs': delayMs,
+      },
+    );
   }
 
   Future<void> _publishDeadLetter(
@@ -509,10 +567,13 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
   Future<void> _declareBoundQueue({
     required String queue,
     required String routingKey,
+    bool ephemeral = false,
   }) async {
     await _adapter.declareQueue(
       name: queue,
-      durable: config.durable,
+      durable: ephemeral ? false : config.durable,
+      exclusive: ephemeral,
+      autoDelete: ephemeral,
       arguments: {'x-dead-letter-exchange': config.deadLetterExchange},
     );
     await _adapter.bindQueue(

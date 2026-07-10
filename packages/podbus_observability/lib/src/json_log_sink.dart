@@ -12,7 +12,9 @@ final class JsonMessagingLogSink {
     this.maxValueCharacters = 2048,
     Set<String>? sensitiveKeys,
   }) : sensitiveKeys = Set.unmodifiable(
-         (sensitiveKeys ?? _defaultSensitiveKeys).map((key) => key.toLowerCase()),
+         (sensitiveKeys ?? _defaultSensitiveKeys).map(
+           (key) => key.toLowerCase(),
+         ),
        ) {
     if (maxValueCharacters < 1) {
       throw const MessagingConfigurationException(
@@ -88,8 +90,7 @@ final class JsonMessagingLogSink {
   bool _isSensitive(String key) {
     final normalized = key.toLowerCase();
     return sensitiveKeys.any(
-      (sensitive) =>
-          normalized == sensitive || normalized.contains(sensitive),
+      (sensitive) => normalized == sensitive || normalized.contains(sensitive),
     );
   }
 

@@ -19,6 +19,7 @@ void main() {
       expect(adapter.declaredExchanges, [
         ('podbus.events', true),
         ('podbus.dead', true),
+        ('podbus.events.retry', true),
       ]);
       expect(adapter.published.single.exchange, 'podbus.events');
       expect(adapter.published.single.routingKey, 'leads.created');
@@ -340,9 +341,13 @@ final class FakeRabbitMqAdapter implements RabbitMqAdapter {
   Future<void> declareQueue({
     required String name,
     required bool durable,
+    bool exclusive = false,
+    bool autoDelete = false,
     Map<String, Object?> arguments = const {},
   }) async {
-    declaredQueues.add(FakeQueueDeclaration(name, durable, arguments));
+    declaredQueues.add(
+      FakeQueueDeclaration(name, durable, exclusive, autoDelete, arguments),
+    );
   }
 
   @override
@@ -424,10 +429,18 @@ final class FakeRabbitMqDelivery implements RabbitMqDelivery {
 }
 
 final class FakeQueueDeclaration {
-  const FakeQueueDeclaration(this.name, this.durable, this.arguments);
+  const FakeQueueDeclaration(
+    this.name,
+    this.durable,
+    this.exclusive,
+    this.autoDelete,
+    this.arguments,
+  );
 
   final String name;
   final bool durable;
+  final bool exclusive;
+  final bool autoDelete;
   final Map<String, Object?> arguments;
 }
 
