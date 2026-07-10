@@ -1,0 +1,48 @@
+name: Compatibility
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "23 4 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compatibility-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dart:
+    name: Dart ${{ matrix.sdk }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        sdk:
+          - 3.12.0
+          - stable
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
+        with:
+          sdk: ${{ matrix.sdk }}
+      - name: Resolve dependencies
+        run: dart pub get
+      - name: Analyze
+        run: dart analyze .
+      - name: Run unit tests
+        run: >-
+          dart test
+          packages/podbus_core/test
+          packages/podbus_nats/test
+          packages/podbus_rabbitmq/test
+          packages/podbus_kafka/test
+          packages/podbus_postgres/test
+          packages/podbus_observability/test
+          packages/podbus_serverpod/test
+          --exclude-tags=integration
