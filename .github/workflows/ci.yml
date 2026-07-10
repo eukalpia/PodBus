@@ -28,12 +28,31 @@ jobs:
           sdk: ${{ env.DART_SDK }}
       - name: Resolve dependencies
         run: dart pub get
-      - name: Check formatting
-        run: dart format --output=none --set-exit-if-changed .
+      - name: Format sources
+        run: dart format .
+      - name: Detect formatting drift
+        id: formatting
+        continue-on-error: true
+        run: |
+          git diff --exit-code || {
+            git diff --binary > formatting.patch
+            exit 1
+          }
       - name: Analyze
         run: dart analyze .
       - name: Verify package metadata
         run: dart run tool/verify_release.dart --check
+      - name: Upload formatting patch
+        if: steps.formatting.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: formatting-patch
+          path: formatting.patch
+          if-no-files-found: error
+          retention-days: 7
+      - name: Reject formatting drift
+        if: steps.formatting.outcome == 'failure'
+        run: exit 1
 
   unit-tests:
     name: Unit tests
