@@ -1,12 +1,11 @@
-// ignore_for_file: implementation_imports
-
 import 'dart:convert';
 import 'dart:ffi' as ffi;
 import 'dart:io';
 
 import 'package:ffi/ffi.dart';
-import 'package:kafka_dart/src/infrastructure/bindings/rdkafka_bindings.g.dart';
 import 'package:podbus_core/podbus_core.dart';
+
+import 'rdkafka_bindings.dart';
 
 final class NativeKafkaLibrary {
   const NativeKafkaLibrary({this.libraryPaths = const []});
@@ -72,17 +71,13 @@ final class NativeKafkaProducer {
   NativeKafkaProducer._(this._bindings, this._kafka);
 
   final RdkafkaBindings _bindings;
-  ffi.Pointer<rd_kafka_t>? _kafka;
+  ffi.Pointer<RdKafkaHandle>? _kafka;
 
   static NativeKafkaProducer connect(
     RdkafkaBindings bindings,
     Map<String, String> properties,
   ) {
-    final kafka = _createClient(
-      bindings,
-      rd_kafka_type_t.RD_KAFKA_PRODUCER,
-      properties,
-    );
+    final kafka = _createClient(bindings, rdKafkaProducer, properties);
     return NativeKafkaProducer._(bindings, kafka);
   }
 
@@ -96,11 +91,11 @@ final class NativeKafkaProducer {
     final payloadPtr = calloc<ffi.Uint8>(payload.length);
     ffi.Pointer<Utf8>? keyPtr;
 
-    for (var i = 0; i < payload.length; i += 1) {
-      payloadPtr[i] = payload[i];
+    for (var index = 0; index < payload.length; index += 1) {
+      payloadPtr[index] = payload[index];
     }
 
-    final topicHandle = _bindings.rd_kafka_topic_new(
+    final topicHandle = _bindings.rdKafkaTopicNew(
       kafka,
       topicName.cast(),
       ffi.nullptr,
@@ -117,10 +112,10 @@ final class NativeKafkaProducer {
       if (key != null) {
         keyPtr = key.toNativeUtf8();
       }
-      final result = _bindings.rd_kafka_produce(
+      final result = _bindings.rdKafkaProduce(
         topicHandle,
-        -1,
-        RD_KAFKA_MSG_F_COPY,
+        rdKafkaPartitionUnassigned,
+        rdKafkaMessageCopy,
         payloadPtr.cast(),
         payload.length,
         keyPtr?.cast() ?? ffi.nullptr,
@@ -132,9 +127,9 @@ final class NativeKafkaProducer {
           'Failed to produce Kafka message to $topic.',
         );
       }
-      _bindings.rd_kafka_poll(kafka, 0);
+      _bindings.rdKafkaPoll(kafka, 0);
     } finally {
-      _bindings.rd_kafka_topic_destroy(topicHandle);
+      _bindings.rdKafkaTopicDestroy(topicHandle);
       calloc.free(topicName);
       calloc.free(payloadPtr);
       if (keyPtr != null) {
@@ -144,7 +139,7 @@ final class NativeKafkaProducer {
   }
 
   void flush(Duration timeout) {
-    final result = _bindings.rd_kafka_flush(
+    final result = _bindings.rdKafkaFlush(
       _requireKafka(),
       timeout.inMilliseconds,
     );
@@ -156,12 +151,12 @@ final class NativeKafkaProducer {
     if (kafka == null) {
       return;
     }
-    _bindings.rd_kafka_flush(kafka, timeout.inMilliseconds);
-    _bindings.rd_kafka_destroy(kafka);
+    _bindings.rdKafkaFlush(kafka, timeout.inMilliseconds);
+    _bindings.rdKafkaDestroy(kafka);
     _kafka = null;
   }
 
-  ffi.Pointer<rd_kafka_t> _requireKafka() {
+  ffi.Pointer<RdKafkaHandle> _requireKafka() {
     final kafka = _kafka;
     if (kafka == null) {
       throw const MessagingConnectionException(
@@ -176,22 +171,18 @@ final class NativeKafkaConsumer {
   NativeKafkaConsumer._(this._bindings, this._kafka);
 
   final RdkafkaBindings _bindings;
-  ffi.Pointer<rd_kafka_t>? _kafka;
-  ffi.Pointer<rd_kafka_message_t>? _pendingMessage;
+  ffi.Pointer<RdKafkaHandle>? _kafka;
+  ffi.Pointer<RdKafkaMessage>? _pendingMessage;
 
   static NativeKafkaConsumer connect({
     required RdkafkaBindings bindings,
     required List<String> topics,
     required Map<String, String> properties,
   }) {
-    final kafka = _createClient(
-      bindings,
-      rd_kafka_type_t.RD_KAFKA_CONSUMER,
-      properties,
-    );
+    final kafka = _createClient(bindings, rdKafkaConsumer, properties);
     _ensureNoError(
       bindings,
-      bindings.rd_kafka_poll_set_consumer(kafka),
+      bindings.rdKafkaPollSetConsumer(kafka),
       'Kafka consumer poll setup failed.',
     );
     final consumer = NativeKafkaConsumer._(bindings, kafka);
@@ -206,9 +197,7 @@ final class NativeKafkaConsumer {
       );
     }
 
-    final topicList = _bindings.rd_kafka_topic_partition_list_new(
-      topics.length,
-    );
+    final topicList = _bindings.rdKafkaTopicPartitionListNew(topics.length);
     if (topicList == ffi.nullptr) {
       throw const MessagingConnectionException(
         'Unable to allocate Kafka topic list.',
@@ -219,27 +208,27 @@ final class NativeKafkaConsumer {
       for (final topic in topics) {
         final topicName = topic.toNativeUtf8();
         try {
-          _bindings.rd_kafka_topic_partition_list_add(
+          _bindings.rdKafkaTopicPartitionListAdd(
             topicList,
             topicName.cast(),
-            -1,
+            rdKafkaPartitionUnassigned,
           );
         } finally {
           calloc.free(topicName);
         }
       }
 
-      final result = _bindings.rd_kafka_subscribe(_requireKafka(), topicList);
+      final result = _bindings.rdKafkaSubscribe(_requireKafka(), topicList);
       _ensureNoError(_bindings, result, 'Kafka consumer subscribe failed.');
     } finally {
-      _bindings.rd_kafka_topic_partition_list_destroy(topicList);
+      _bindings.rdKafkaTopicPartitionListDestroy(topicList);
     }
   }
 
   NativeKafkaRecord? poll(Duration timeout) {
     _releasePendingMessage();
 
-    final message = _bindings.rd_kafka_consumer_poll(
+    final message = _bindings.rdKafkaConsumerPoll(
       _requireKafka(),
       timeout.inMilliseconds,
     );
@@ -248,20 +237,20 @@ final class NativeKafkaConsumer {
     }
 
     final value = message.ref;
-    if (value.err != rd_kafka_resp_err_t.RD_KAFKA_RESP_ERR_NO_ERROR) {
+    if (value.error != rdKafkaRespErrNoError) {
       final description = _messageError(message);
-      _bindings.rd_kafka_message_destroy(message);
+      _bindings.rdKafkaMessageDestroy(message);
       throw MessagingConnectionException(
         'Kafka consumer poll failed: $description.',
       );
     }
 
     _pendingMessage = message;
-    final topicName = _bindings.rd_kafka_topic_name(value.rkt);
-    final keyBytes = _copyBytes(value.key, value.key_len);
+    final topicName = _bindings.rdKafkaTopicName(value.topic);
+    final keyBytes = _copyBytes(value.key, value.keyLength);
     return NativeKafkaRecord(
       topic: topicName.cast<Utf8>().toDartString(),
-      payload: _copyBytes(value.payload, value.len),
+      payload: _copyBytes(value.payload, value.payloadLength),
       key: keyBytes.isEmpty ? null : utf8.decode(keyBytes),
       partition: value.partition,
       offset: value.offset,
@@ -275,7 +264,7 @@ final class NativeKafkaConsumer {
       return;
     }
 
-    final result = _bindings.rd_kafka_commit_message(kafka, message, 0);
+    final result = _bindings.rdKafkaCommitMessage(kafka, message, 0);
     _ensureNoError(_bindings, result, 'Kafka offset commit failed.');
     _releasePendingMessage();
   }
@@ -287,13 +276,13 @@ final class NativeKafkaConsumer {
     }
 
     _releasePendingMessage();
-    _bindings.rd_kafka_unsubscribe(kafka);
-    _bindings.rd_kafka_consumer_close(kafka);
-    _bindings.rd_kafka_destroy(kafka);
+    _bindings.rdKafkaUnsubscribe(kafka);
+    _bindings.rdKafkaConsumerClose(kafka);
+    _bindings.rdKafkaDestroy(kafka);
     _kafka = null;
   }
 
-  ffi.Pointer<rd_kafka_t> _requireKafka() {
+  ffi.Pointer<RdKafkaHandle> _requireKafka() {
     final kafka = _kafka;
     if (kafka == null) {
       throw const MessagingConnectionException(
@@ -308,14 +297,14 @@ final class NativeKafkaConsumer {
     if (message == null) {
       return;
     }
-    _bindings.rd_kafka_message_destroy(message);
+    _bindings.rdKafkaMessageDestroy(message);
     _pendingMessage = null;
   }
 
-  String _messageError(ffi.Pointer<rd_kafka_message_t> message) {
-    final error = _bindings.rd_kafka_message_errstr(message);
+  String _messageError(ffi.Pointer<RdKafkaMessage> message) {
+    final error = _bindings.rdKafkaMessageErrorString(message);
     if (error == ffi.nullptr) {
-      return _errorDescription(_bindings, message.ref.err);
+      return _errorDescription(_bindings, message.ref.error);
     }
     return error.cast<Utf8>().toDartString();
   }
@@ -337,12 +326,12 @@ final class NativeKafkaRecord {
   final int offset;
 }
 
-ffi.Pointer<rd_kafka_t> _createClient(
+ffi.Pointer<RdKafkaHandle> _createClient(
   RdkafkaBindings bindings,
-  rd_kafka_type_t type,
+  int type,
   Map<String, String> properties,
 ) {
-  final config = bindings.rd_kafka_conf_new();
+  final config = bindings.rdKafkaConfigNew();
   if (config == ffi.nullptr) {
     throw const MessagingConnectionException(
       'Unable to allocate Kafka client configuration.',
@@ -357,7 +346,7 @@ ffi.Pointer<rd_kafka_t> _createClient(
 
     final errorBuffer = calloc<ffi.Char>(512);
     try {
-      final kafka = bindings.rd_kafka_new(type, config, errorBuffer, 512);
+      final kafka = bindings.rdKafkaNew(type, config, errorBuffer, 512);
       if (kafka == ffi.nullptr) {
         throw MessagingConnectionException(
           'Unable to create Kafka client: '
@@ -371,14 +360,14 @@ ffi.Pointer<rd_kafka_t> _createClient(
     }
   } finally {
     if (configOwned) {
-      bindings.rd_kafka_conf_destroy(config);
+      bindings.rdKafkaConfigDestroy(config);
     }
   }
 }
 
 void _setConfig(
   RdkafkaBindings bindings,
-  ffi.Pointer<rd_kafka_conf_t> config,
+  ffi.Pointer<RdKafkaConfig> config,
   String key,
   String value,
 ) {
@@ -387,14 +376,14 @@ void _setConfig(
   final errorBuffer = calloc<ffi.Char>(256);
 
   try {
-    final result = bindings.rd_kafka_conf_set(
+    final result = bindings.rdKafkaConfigSet(
       config,
       nativeKey.cast(),
       nativeValue.cast(),
       errorBuffer,
       256,
     );
-    if (result != rd_kafka_conf_res_t.RD_KAFKA_CONF_OK) {
+    if (result != rdKafkaConfOk) {
       throw MessagingConfigurationException(
         'Invalid Kafka configuration "$key": '
         '${errorBuffer.cast<Utf8>().toDartString()}.',
@@ -417,10 +406,10 @@ List<int> _copyBytes(ffi.Pointer<ffi.Void> pointer, int length) {
 
 void _ensureNoError(
   RdkafkaBindings bindings,
-  rd_kafka_resp_err_t result,
+  int result,
   String message,
 ) {
-  if (result == rd_kafka_resp_err_t.RD_KAFKA_RESP_ERR_NO_ERROR) {
+  if (result == rdKafkaRespErrNoError) {
     return;
   }
 
@@ -429,6 +418,6 @@ void _ensureNoError(
   );
 }
 
-String _errorDescription(RdkafkaBindings bindings, rd_kafka_resp_err_t error) {
-  return bindings.rd_kafka_err2str(error).cast<Utf8>().toDartString();
+String _errorDescription(RdkafkaBindings bindings, int error) {
+  return bindings.rdKafkaErrorString(error).cast<Utf8>().toDartString();
 }
