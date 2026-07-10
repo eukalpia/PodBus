@@ -32,5 +32,20 @@ jobs:
       - working-directory: serverpod
         run: dart format tools/serverpod_cli/lib/src/analyzer/models/validation/restrictions.dart tools/serverpod_cli/test/analyzer/models/stateful_analyzer/model_validation/relation/relation_database_action_test.dart
       - name: Focused test output
+        id: focused
+        continue-on-error: true
         working-directory: serverpod/tools/serverpod_cli
-        run: dart test --reporter expanded test/analyzer/models/stateful_analyzer/model_validation/relation/relation_database_action_test.dart
+        shell: bash
+        run: |
+          set -o pipefail
+          dart test --reporter expanded test/analyzer/models/stateful_analyzer/model_validation/relation/relation_database_action_test.dart 2>&1 | tee ../../../focused-test.log
+      - name: Upload focused test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: serverpod-5401-focused-test-log
+          path: serverpod/focused-test.log
+          if-no-files-found: error
+      - name: Fail when focused tests fail
+        if: steps.focused.outcome == 'failure'
+        run: exit 1
