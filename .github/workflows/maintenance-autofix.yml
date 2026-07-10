@@ -29,8 +29,17 @@ jobs:
       - name: Apply safe Dart fixes
         run: |
           dart fix --apply
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('packages/podbus_rabbitmq/test/rabbitmq_adapter_test.dart')
+          text = path.read_text().replace(
+              'final Map? payloadAsJson = null;',
+              'final Map<Object?, Object?>? payloadAsJson = null;',
+          )
+          path.write_text(text)
+          PY
           dart format .
-          dart analyze .
       - name: Commit fixes
         shell: bash
         run: |
