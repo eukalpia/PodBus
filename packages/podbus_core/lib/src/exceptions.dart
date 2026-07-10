@@ -32,9 +32,12 @@ final class MessagingConnectionException extends MessagingException {
 final class MessagingTimeoutException extends MessagingException {
   const MessagingTimeoutException(
     super.message, {
+    this.timeout,
     super.cause,
     super.stackTrace,
   });
+
+  final Duration? timeout;
 }
 
 final class MessagingUnsupportedException extends MessagingException {
