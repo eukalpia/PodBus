@@ -72,9 +72,8 @@ void main(List<String> arguments) {
     return;
   }
 
-  stdout.writeln(
-    'Release metadata is consistent for ${versions.values.single}.',
-  );
+  final version = versions.values.isEmpty ? 'unknown' : versions.values.first;
+  stdout.writeln('Release metadata is consistent for $version.');
 }
 
 Map<String, String> _topLevelFields(List<String> lines) {
