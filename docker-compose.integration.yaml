@@ -13,11 +13,9 @@ services:
 
   rabbitmq:
     image: rabbitmq:3.13-management
-    hostname: rabbitmq
     environment:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
-      RABBITMQ_ERLANG_COOKIE: podbus-integration-cookie
     ports:
       - "5672:5672"
       - "15672:15672"
