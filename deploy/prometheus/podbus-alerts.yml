@@ -1,0 +1,69 @@
+groups:
+  - name: podbus
+    rules:
+      - alert: PodBusNoSuccessfulProcessing
+        expr: increase(podbus_jobs_completed_total[10m]) == 0 and increase(podbus_messages_received_total[10m]) > 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: PodBus receives work but completes nothing
+          description: Check handler failures, broker acknowledgements, and downstream dependencies.
+
+      - alert: PodBusFailureRateHigh
+        expr: |
+          sum(rate(podbus_jobs_failed_total[5m]))
+            /
+          clamp_min(sum(rate(podbus_messages_received_total[5m])), 0.001)
+            > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: PodBus handler failure rate exceeds 5%
+          description: Inspect errors by transport and topic without adding high-cardinality labels.
+
+      - alert: PodBusDeadLetterRateHigh
+        expr: sum(rate(podbus_jobs_dead_lettered_total[10m])) > 0.1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: PodBus dead-letter traffic is increasing
+          description: Stop automated replay until the failure class is understood.
+
+      - alert: PodBusConsumerLagHigh
+        expr: max(podbus_consumer_lag) > 10000
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: PodBus consumer lag is above the operating threshold
+          description: Compare ingress, processing time, partition distribution, and downstream capacity.
+
+      - alert: PodBusOutboxOldestPendingTooOld
+        expr: max(podbus_outbox_oldest_pending_seconds) > 300
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: PodBus outbox contains work older than five minutes
+          description: Check broker connectivity, publisher confirmations, relay leases, and database load.
+
+      - alert: PodBusReconnectStorm
+        expr: sum(increase(podbus_reconnect_total[5m])) > 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: PodBus reconnect rate is abnormally high
+          description: Check broker health, DNS, certificates, credentials, and network stability.
+
+      - alert: PodBusMetricSeriesDropped
+        expr: increase(podbus_metrics_dropped_series_total[10m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: PodBus observability dropped metric series
+          description: Reduce label cardinality or review the configured series limit.
