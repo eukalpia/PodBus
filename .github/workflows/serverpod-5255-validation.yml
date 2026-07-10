@@ -1,0 +1,166 @@
+name: Validate Serverpod 5255 patch
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - agent/serverpod-ci-validation
+    paths:
+      - ".github/workflows/serverpod-5255-validation.yml"
+      - "contrib/serverpod/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: serverpod-5255-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  patch-structure:
+    name: Patch applies cleanly
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out validation harness
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          path: harness
+
+      - name: Check out latest Serverpod main
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: serverpod/serverpod
+          ref: main
+          path: serverpod
+
+      - name: Verify patch scope and shell syntax
+        shell: bash
+        working-directory: serverpod
+        run: |
+          set -euo pipefail
+
+          patch_file="../harness/contrib/serverpod/5255-ci-generation.patch"
+          git config core.safecrlf false
+          git apply --check "$patch_file"
+          git apply "$patch_file"
+          git diff --check
+
+          expected_files=$(printf '%s\n' \
+            '.github/workflows/dart-tests.yaml' \
+            'util/run_tests_serverpod_generate')
+          actual_files=$(git diff --name-only | sort)
+
+          if [ "$actual_files" != "$expected_files" ]; then
+            echo "Unexpected patch scope"
+            echo "Expected:"
+            printf '%s\n' "$expected_files"
+            echo "Actual:"
+            printf '%s\n' "$actual_files"
+            exit 1
+          fi
+
+          bash -n util/run_tests_serverpod_generate
+
+          grep -F 'rm -rf "$GENERATED_DIR"' util/run_tests_serverpod_generate
+          grep -F 'test -d "$GENERATED_DIR"' util/run_tests_serverpod_generate
+
+          if grep -Fq 'Verify generate from scratch' .github/workflows/dart-tests.yaml; then
+            echo "The duplicate generation workflow step still exists"
+            exit 1
+          fi
+
+          git diff --stat
+          git diff -- .github/workflows/dart-tests.yaml util/run_tests_serverpod_generate
+
+  generation:
+    name: Generate (${{ matrix.os }}, Flutter ${{ matrix.flutter-version }})
+    needs: patch-structure
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+        flutter-version:
+          - "3.38.4"
+          - "3.41.5"
+
+    steps:
+      - name: Check out validation harness
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          path: harness
+
+      - name: Check out latest Serverpod main
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: serverpod/serverpod
+          ref: main
+          path: serverpod
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ matrix.flutter-version }}
+          cache: true
+
+      - name: Apply and commit contribution patch
+        shell: bash
+        working-directory: serverpod
+        run: |
+          set -euo pipefail
+
+          patch_file="../harness/contrib/serverpod/5255-ci-generation.patch"
+          git config core.safecrlf false
+          git apply --check "$patch_file"
+          git apply "$patch_file"
+          git diff --check
+          bash -n util/run_tests_serverpod_generate
+
+          git config user.name "Serverpod contribution CI"
+          git config user.email "serverpod-ci@example.invalid"
+          git add .github/workflows/dart-tests.yaml util/run_tests_serverpod_generate
+          git commit -m "ci: avoid duplicate clean code generation"
+
+          changed_files=$(git diff-tree --no-commit-id --name-only -r HEAD | sort)
+          expected_files=$(printf '%s\n' \
+            '.github/workflows/dart-tests.yaml' \
+            'util/run_tests_serverpod_generate')
+
+          if [ "$changed_files" != "$expected_files" ]; then
+            echo "Unexpected committed patch scope"
+            git show --stat --oneline HEAD
+            exit 1
+          fi
+
+      - name: Bootstrap Serverpod monorepo
+        shell: bash
+        working-directory: serverpod
+        run: |
+          set -euo pipefail
+          dart pub global activate melos
+          melos bootstrap
+
+      - name: Run real Serverpod generation validation
+        shell: bash
+        working-directory: serverpod
+        run: |
+          set -euo pipefail
+          bash util/run_tests_serverpod_generate
+
+      - name: Verify repository remains clean
+        if: always()
+        shell: bash
+        working-directory: serverpod
+        run: |
+          git status --short
+
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "Generation left uncommitted changes"
+            git diff --stat
+            git diff
+            exit 1
+          fi
