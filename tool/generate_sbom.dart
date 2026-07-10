@@ -68,7 +68,8 @@ void main(List<String> arguments) {
   }
 
   packages.sort(
-    (left, right) => (left['name'] as String).compareTo(right['name'] as String),
+    (left, right) =>
+        (left['name'] as String).compareTo(right['name'] as String),
   );
 
   final now = DateTime.now().toUtc();
@@ -93,7 +94,9 @@ void main(List<String> arguments) {
   outputFile.writeAsStringSync(
     '${const JsonEncoder.withIndent('  ').convert(document)}\n',
   );
-  stdout.writeln('Wrote SPDX SBOM with ${packages.length} packages to $output.');
+  stdout.writeln(
+    'Wrote SPDX SBOM with ${packages.length} packages to $output.',
+  );
 }
 
 String? _valueAfter(List<String> arguments, String option) {
