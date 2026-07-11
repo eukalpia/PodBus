@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title">
+  <title id="title">PodBus</title>
+  <rect width="96" height="96" rx="22" fill="#07111c"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M15 30C29 15 51 12 68 22" stroke="#ff8a1f" stroke-width="8"/>
+    <path d="M59 20C76 17 86 26 83 38C81 47 72 51 61 50" stroke="#ffad26" stroke-width="8"/>
+    <path d="M12 49C26 35 45 34 60 42" stroke="#ff8a1f" stroke-width="8"/>
+    <path d="M34 58C51 70 72 65 85 52" stroke="#13a8ff" stroke-width="8"/>
+    <path d="M15 72C29 85 53 87 72 75" stroke="#13a8ff" stroke-width="8"/>
+  </g>
+  <circle cx="46" cy="17" r="8" fill="#ff8a1f"/>
+  <circle cx="49" cy="39" r="8" fill="#ffad26"/>
+  <circle cx="45" cy="62" r="8" fill="#13a8ff"/>
+  <circle cx="34" cy="79" r="8" fill="#13a8ff"/>
+</svg>
