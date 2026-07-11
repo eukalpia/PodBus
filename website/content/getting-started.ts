@@ -372,8 +372,10 @@ await jobs.close();`,
             language: 'dart',
             code: `final messagingConfig = MessagingConfig(
   codecRegistry: codecs,
-  maxPayloadBytes: 1024 * 1024,
-  maxHeaderBytes: 16 * 1024,
+  limits: const MessagingLimits(
+    maxPayloadBytes: 1024 * 1024,
+    maxHeaderBytes: 16 * 1024,
+  ),
   requestTimeout: const Duration(seconds: 5),
   metricHook: metrics.hook,
   logHook: logs.hook,

@@ -49,7 +49,7 @@ final bus = NatsMessageBus(
             type: 'bullets',
             items: [
               'Configure more than one server in clustered environments.',
-              'Use TLS and NKey, JWT, credentials, or scoped user authentication in production.',
+              'Use TLS with a scoped token or username/password credentials. NKey and JWT authentication are not exposed by the current adapter.',
               'Give each service only the subjects it must publish or subscribe to.',
               'Set request timeouts from the caller budget, not an arbitrary global default.',
             ],
@@ -154,13 +154,13 @@ final bus = NatsMessageBus(
           },
           {
             type: 'paragraph',
-            text: 'The stream name and subject set are persistent broker state. Keep their definitions in version control and review retention, storage, replica count, maximum age, maximum bytes, and discard policy with the same care as a database schema.',
+            text: 'The stream name and subject set are persistent broker state. Keep their definitions in version control and review retention, storage, replica count, maximum age, maximum bytes, and discard policy with the same care as a database schema. The alpha adapter exposes stream retention and replica options, but advanced consumer tuning remains a production validation item.',
           },
         ],
       },
       {
         id: 'consumer-tuning',
-        title: 'Consumer tuning',
+        title: 'Consumer settings to validate',
         blocks: [
           {
             type: 'table',
@@ -178,7 +178,7 @@ final bus = NatsMessageBus(
             type: 'note',
             tone: 'warning',
             title: 'ackWait must exceed realistic handler time',
-            text: 'When handlers regularly exceed the acknowledgement window, the same message may run concurrently on another worker. Use in-progress heartbeats or redesign the job into smaller steps.',
+            text: 'When handlers regularly exceed the acknowledgement window, the same message may run concurrently on another worker. The current alpha API does not expose every JetStream consumer knob; validate broker defaults and redesign long jobs into smaller steps where necessary.',
           },
         ],
       },
@@ -203,6 +203,7 @@ final bus = NatsMessageBus(
     jitter: 0.25,
   ),
   deadLetterPolicy: const DeadLetterPolicy(
+    enabled: true,
     destination: 'jobs.report.generate.dead',
   ),
   handler: (context, job) => reports.generate(job),

@@ -54,7 +54,7 @@ Run `PostgresOutboxRelay.runOnce()` from a supervised loop. Give every replica a
 
 Production broker endpoints must use encrypted connections:
 
-- NATS: TLS plus credentials, NKey, or JWT accounts.
+- NATS: TLS plus a scoped token or username/password credentials exposed by the current adapter.
 - RabbitMQ: `amqps://`, trusted certificate authorities, dedicated users, and separate virtual hosts where practical.
 - Kafka: TLS plus SASL/SCRAM or the authentication mechanism required by the cluster.
 - PostgreSQL: TLS with certificate verification; never use the integration-test credentials.

@@ -181,7 +181,7 @@ try {
       },
       {
         id: 'state-machine',
-        title: 'Recommended state machine',
+        title: 'A richer business-operation state model',
         blocks: [
           {
             type: 'table',
@@ -196,7 +196,7 @@ try {
           },
           {
             type: 'paragraph',
-            text: 'A lease is safer than a permanent processing flag. If a worker dies, another worker can recover the operation after the lease expires.',
+            text: 'PostgresIdempotencyStore currently provides a compact TTL claim rather than this full state machine. Use PostgresInbox for leased processing state, or build a domain-specific operation table when pending, processing, completed, and terminal failure states must be distinguished.',
           },
         ],
       },
@@ -400,9 +400,10 @@ while (!shuttingDown) {
             code: `final inbox = PostgresInbox(pool);
 
 handler: (context, event) async {
-  final messageId = context.headers.messageId;
+  // Use a stable ID carried by the domain event or wire envelope.
+  final deliveryKey = event.eventId;
   final lease = await inbox.acquire(
-    messageId,
+    deliveryKey,
     workerId: workerId,
   );
 
@@ -414,7 +415,7 @@ handler: (context, event) async {
     await applyProjection(event);
     await inbox.complete(lease);
   } catch (error) {
-    await inbox.fail(lease, error: error);
+    await inbox.fail(lease, error);
     rethrow;
   }
 }`, 

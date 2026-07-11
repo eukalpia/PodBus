@@ -34,7 +34,7 @@ export const operationsDocs: DocPage[] = [
             type: 'table',
             headers: ['System', 'Production baseline'],
             rows: [
-              ['NATS', 'TLS plus scoped credentials, NKey, or JWT accounts.'],
+              ['NATS', 'TLS plus a scoped token or username/password credentials exposed by the current adapter.'],
               ['RabbitMQ', 'amqps, certificate verification, dedicated users, and isolated vhosts.'],
               ['Kafka', 'TLS plus SASL/SCRAM or the cluster-required mechanism and narrow ACLs.'],
               ['PostgreSQL', 'TLS with certificate verification and a least-privilege database role.'],
@@ -269,7 +269,7 @@ then add measured headroom, not an arbitrary multiplier`,
 
 await for (final _ in signals) {
   readiness.disable();
-  await messaging.close(timeout: const Duration(seconds: 30));
+  await messaging.stop(timeout: const Duration(seconds: 30));
   await database.close();
   break;
 }`,

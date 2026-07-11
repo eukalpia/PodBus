@@ -127,6 +127,7 @@ await jobs.worker<Map<String, Object?>>(
     jitter: 0.2,
   ),
   deadLetterPolicy: const DeadLetterPolicy(
+    enabled: true,
     destination: 'jobs.email.welcome.dead',
     includeErrorDetails: true,
     includeOriginalPayload: false,
