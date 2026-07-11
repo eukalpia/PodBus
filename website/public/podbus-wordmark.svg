@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 90" role="img" aria-labelledby="title desc">
+  <title id="title">PodBus</title>
+  <desc id="desc">PodBus blue and orange message routes with the PodBus wordmark.</desc>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 26C26 12 47 9 66 18" stroke="#ff8a1f" stroke-width="7"/>
+    <path d="M55 16C72 13 82 21 80 32C78 40 70 44 59 44" stroke="#ffad26" stroke-width="7"/>
+    <path d="M9 45C22 31 42 29 57 37" stroke="#ff8a1f" stroke-width="7"/>
+    <path d="M32 54C48 66 68 62 81 49" stroke="#13a8ff" stroke-width="7"/>
+    <path d="M12 66C25 79 49 82 68 71" stroke="#13a8ff" stroke-width="7"/>
+    <path d="M61 69C72 65 79 59 82 52" stroke="#008ee6" stroke-width="7"/>
+  </g>
+  <g>
+    <circle cx="43" cy="14" r="7" fill="#ff8a1f"/>
+    <circle cx="47" cy="34" r="7" fill="#ffad26"/>
+    <circle cx="43" cy="57" r="7" fill="#13a8ff"/>
+    <circle cx="31" cy="75" r="7" fill="#13a8ff"/>
+  </g>
+  <text x="98" y="64" fill="#f7fbff" font-family="Inter, Arial, Helvetica, sans-serif" font-size="54" font-style="italic" font-weight="750" letter-spacing="-2.5">Pod<tspan fill="#13a8ff">Bus</tspan></text>
+</svg>
