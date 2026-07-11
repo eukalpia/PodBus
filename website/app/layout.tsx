@@ -8,8 +8,11 @@ import { siteConfig } from '@/lib/site';
 
 import './globals.css';
 
+const siteUrl = 'https://eukalpia.github.io/PodBus/';
+const logoUrl = `${siteUrl}podbus.png`;
+
 export const metadata: Metadata = {
-  metadataBase: new URL('https://eukalpia.github.io/PodBus/'),
+  metadataBase: new URL(siteUrl),
   title: {
     default: 'PodBus — Messaging and durable jobs for Dart',
     template: '%s — PodBus',
@@ -30,26 +33,26 @@ export const metadata: Metadata = {
     'transactional outbox',
   ],
   alternates: {
-    canonical: '/',
+    canonical: siteUrl,
   },
   openGraph: {
     type: 'website',
-    url: 'https://eukalpia.github.io/PodBus/',
+    url: siteUrl,
     title: 'PodBus — Messaging and durable jobs for Dart',
     description: siteConfig.description,
     siteName: 'PodBus',
-    images: [{ url: '/podbus.png', alt: 'PodBus' }],
+    images: [{ url: logoUrl, alt: 'PodBus' }],
   },
   twitter: {
     card: 'summary_large_image',
     title: 'PodBus — Messaging and durable jobs for Dart',
     description: siteConfig.description,
-    images: ['/podbus.png'],
+    images: [logoUrl],
   },
   icons: {
-    icon: '/podbus.png',
-    shortcut: '/podbus.png',
-    apple: '/podbus.png',
+    icon: logoUrl,
+    shortcut: logoUrl,
+    apple: logoUrl,
   },
 };
 
