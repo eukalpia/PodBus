@@ -11,15 +11,17 @@ import 'nats_jetstream_adapter.dart';
 final class NatsJetStreamJobQueue implements DurableJobQueue {
   NatsJetStreamJobQueue({
     required this.config,
+    MessagingConfig? messagingConfig,
     NatsJetStreamAdapter? jetStreamAdapter,
     MessageCodec? codec,
     IdempotencyStore? idempotencyStore,
     Duration idempotencyTtl = const Duration(hours: 24),
     Duration fetchTimeout = const Duration(seconds: 1),
     int fetchBatchSize = 1,
-  }) : _adapter = jetStreamAdapter ?? DartNatsJetStreamAdapter(),
-       _codec = codec ?? const JsonMessageCodec(),
-       _idempotencyStore = idempotencyStore,
+  }) : messagingConfig = messagingConfig ?? MessagingConfig(codec: codec),
+       _adapter = jetStreamAdapter ?? DartNatsJetStreamAdapter(),
+       _idempotencyStore =
+           idempotencyStore ?? messagingConfig?.idempotencyStore,
        _idempotencyTtl = idempotencyTtl,
        _fetchTimeout = fetchTimeout,
        _fetchBatchSize = fetchBatchSize {
@@ -30,53 +32,87 @@ final class NatsJetStreamJobQueue implements DurableJobQueue {
     }
   }
 
-  static const _contentTypeHeader = 'podbus-content-type';
-  static const _schemaVersionHeader = 'podbus-schema-version';
-  static const _deadLetterSourceHeader = 'podbus-dead-letter-source';
-  static const _deadLetterErrorHeader = 'podbus-dead-letter-error';
-  static const _deadLetterStackTraceHeader = 'podbus-dead-letter-stack-trace';
-  static const _retryMaxAttemptsHeader = 'podbus-retry-max-attempts';
-  static const _retryInitialDelayMicrosHeader =
-      'podbus-retry-initial-delay-micros';
-  static const _retryMaxDelayMicrosHeader = 'podbus-retry-max-delay-micros';
-  static const _retryBackoffMultiplierHeader =
-      'podbus-retry-backoff-multiplier';
-  static const _retryJitterHeader = 'podbus-retry-jitter';
+  static const _capabilities = MessagingCapabilities({
+    MessagingCapability.durableJobs,
+    MessagingCapability.manualAcknowledgement,
+    MessagingCapability.negativeAcknowledgement,
+    MessagingCapability.termination,
+    MessagingCapability.retries,
+    MessagingCapability.deadLettering,
+    MessagingCapability.idempotentPublish,
+    MessagingCapability.typedPayloads,
+    MessagingCapability.gracefulShutdown,
+  });
 
   final NatsMessagingConfig config;
+  final MessagingConfig messagingConfig;
   final NatsJetStreamAdapter _adapter;
-  final MessageCodec _codec;
   final IdempotencyStore? _idempotencyStore;
   final Duration _idempotencyTtl;
   final Duration _fetchTimeout;
   final int _fetchBatchSize;
   final List<_NatsJetStreamWorker<Object?>> _workers = [];
   var _connected = false;
+  var _closing = false;
+
+  MessageCodec get _codec => messagingConfig.codec;
+
+  @override
+  MessagingCapabilities get capabilities => _capabilities;
 
   @override
   Future<void> connect() async {
     final jetStream = _requireJetStreamConfig();
     _validateJetStreamConfig(jetStream);
+    _closing = false;
 
-    await _adapter.connect(config);
-    await _adapter.createOrUpdateStream(jetStream);
-    _connected = true;
+    try {
+      await _adapter.connect(config);
+      await _adapter.createOrUpdateStream(jetStream);
+      _connected = true;
+    } on Object catch (error, stackTrace) {
+      try {
+        await _adapter.close();
+      } on Object {
+        // Preserve the startup failure.
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    }
   }
 
   @override
   Future<void> close({Duration? timeout}) async {
-    _connected = false;
-
-    final futures = [for (final worker in _workers.toList()) worker.close()];
-    if (timeout == null) {
-      await Future.wait(futures);
-    } else {
-      await Future.wait(futures).timeout(timeout);
+    if (_closing) {
+      return;
     }
-    _workers.clear();
+    _closing = true;
+    _connected = false;
+    final effectiveTimeout = timeout ?? messagingConfig.shutdownTimeout;
+    Object? failure;
+    StackTrace? failureStackTrace;
 
-    await _adapter.drain();
-    await _adapter.close();
+    try {
+      await Future.wait([
+        for (final worker in _workers.toList()) worker.close(),
+      ]).timeout(effectiveTimeout);
+      _workers.clear();
+      await _adapter.drain().timeout(effectiveTimeout);
+    } on Object catch (error, stackTrace) {
+      failure = error;
+      failureStackTrace = stackTrace;
+    } finally {
+      try {
+        await _adapter.close();
+      } on Object catch (error, stackTrace) {
+        failure ??= error;
+        failureStackTrace ??= stackTrace;
+      }
+      _closing = false;
+    }
+
+    if (failure != null) {
+      Error.throwWithStackTrace(failure, failureStackTrace!);
+    }
   }
 
   @override
@@ -107,12 +143,18 @@ final class NatsJetStreamJobQueue implements DurableJobQueue {
 
     try {
       final encoded = await _codec.encode(payload);
+      final wireHeaders = _headersFor(effectiveHeaders, encoded);
+      messagingConfig.validateRawOutbound(encoded.bytes, wireHeaders);
       await _adapter.publish(
         topic,
         encoded.bytes,
         timeout: config.requestTimeout,
         messageId: key,
-        headers: _headersFor(effectiveHeaders, encoded),
+        headers: wireHeaders,
+      );
+      messagingConfig.recordMetric(
+        'podbus.jobs.enqueued',
+        attributes: {'transport': 'nats-jetstream', 'topic': topic},
       );
     } on Object catch (error, stackTrace) {
       if (claimedKey && key != null) {
@@ -177,31 +219,51 @@ final class NatsJetStreamJobQueue implements DurableJobQueue {
 
     try {
       await _adapter.flush();
+      final workerErrors = [
+        for (final worker in _workers)
+          if (worker.lastError != null)
+            {
+              'topic': worker.topic,
+              'consumer': worker.consumerName,
+              'error': messagingConfig.limits.truncateError(worker.lastError!),
+            },
+      ];
+      if (workerErrors.isNotEmpty) {
+        return HealthCheckResult.degraded(
+          message: 'NATS JetStream is connected, but workers reported errors.',
+          details: {'workers': _workers.length, 'workerErrors': workerErrors},
+        );
+      }
       return HealthCheckResult.healthy(
         message: 'NATS JetStream queue is connected.',
         details: {'workers': _workers.length},
       );
     } on Object catch (error, stackTrace) {
-      return HealthCheckResult(
-        status: HealthStatus.unhealthy,
-        checkedAt: DateTime.now(),
+      return HealthCheckResult.unhealthy(
         message: 'NATS JetStream health check failed.',
         details: {
-          'error': error.toString(),
-          'stackTrace': stackTrace.toString(),
+          'error': messagingConfig.limits.truncateError(error),
+          'stackTrace': messagingConfig.limits.truncateError(stackTrace),
         },
       );
     }
   }
 
   Future<T> _decode<T>(NatsJetStreamMessage message) {
+    messagingConfig.limits.validatePayload(message.bytes);
+    messagingConfig.limits.validateHeaders(message.headers);
     return _codec.decode<T>(
       EncodedMessage(
         bytes: message.bytes,
         contentType:
-            message.headers[_contentTypeHeader] ?? JsonMessageCodec.contentType,
+            message.headers[PodBusWireHeaders.contentType] ??
+            JsonMessageCodec.contentType,
         schemaVersion:
-            int.tryParse(message.headers[_schemaVersionHeader] ?? '') ?? 1,
+            int.tryParse(
+              message.headers[PodBusWireHeaders.schemaVersion] ?? '',
+            ) ??
+            1,
+        messageType: message.headers[PodBusWireHeaders.messageType],
       ),
     );
   }
@@ -219,25 +281,49 @@ final class NatsJetStreamJobQueue implements DurableJobQueue {
     }
 
     final destination = policy.destination ?? '${worker.topic}.dead-letter';
-    final customHeaders = {
+    final customHeaders = <String, String>{
       ...headers.custom,
-      _deadLetterSourceHeader: worker.topic,
+      PodBusWireHeaders.deadLetterSource: worker.topic,
+      if (!policy.includeOriginalPayload)
+        PodBusWireHeaders.deadLetterPayloadOmitted: 'true',
       if (policy.includeErrorDetails && error != null)
-        _deadLetterErrorHeader: error.toString(),
+        PodBusWireHeaders.deadLetterError: messagingConfig.limits.truncateError(
+          error,
+        ),
       if (policy.includeErrorDetails && stackTrace != null)
-        _deadLetterStackTraceHeader: stackTrace.toString(),
+        PodBusWireHeaders.deadLetterStackTrace: messagingConfig.limits
+            .truncateError(stackTrace),
     };
-    final deadLetterHeaders = headers.copyWith(custom: customHeaders);
+    final deadLetterHeaders = headers.withoutIdempotencyKey().copyWith(
+      custom: customHeaders,
+    );
+    final bytes = policy.includeOriginalPayload ? message.bytes : const <int>[];
+    final wireHeaders = <String, String>{
+      for (final MapEntry(:key, :value) in deadLetterHeaders.toMap().entries)
+        if (value != null) key: value.toString(),
+      PodBusWireHeaders.contentType: policy.includeOriginalPayload
+          ? (message.headers[PodBusWireHeaders.contentType] ??
+                JsonMessageCodec.contentType)
+          : 'application/octet-stream',
+      PodBusWireHeaders.schemaVersion: policy.includeOriginalPayload
+          ? (message.headers[PodBusWireHeaders.schemaVersion] ?? '1')
+          : '1',
+      if (policy.includeOriginalPayload &&
+          message.headers[PodBusWireHeaders.messageType] != null)
+        PodBusWireHeaders.messageType:
+            message.headers[PodBusWireHeaders.messageType]!,
+    };
+    messagingConfig.validateRawOutbound(bytes, wireHeaders);
 
     await _adapter.publish(
       destination,
-      message.bytes,
+      bytes,
       timeout: config.requestTimeout,
-      headers: {
-        ...message.headers,
-        for (final MapEntry(:key, :value) in deadLetterHeaders.toMap().entries)
-          if (value != null) key: value.toString(),
-      },
+      headers: wireHeaders,
+    );
+    messagingConfig.recordMetric(
+      'podbus.jobs.dead_lettered',
+      attributes: {'transport': 'nats-jetstream', 'topic': worker.topic},
     );
   }
 
@@ -250,7 +336,8 @@ final class NatsJetStreamJobQueue implements DurableJobQueue {
     Object error,
     StackTrace stackTrace,
   ) async {
-    if (attempt < retryPolicy.maxAttempts) {
+    if (messagingConfig.shouldRetry(error) &&
+        attempt < retryPolicy.maxAttempts) {
       await _ensureAckAction(
         message.nak(delay: retryPolicy.delayForAttempt(attempt)),
         'nak',
@@ -297,11 +384,7 @@ final class NatsJetStreamJobQueue implements DurableJobQueue {
   ) {
     return worker.retryPolicy ??
         _retryPolicyFromHeaders(headers) ??
-        RetryPolicy(
-          maxAttempts: 1,
-          initialDelay: Duration.zero,
-          maxDelay: Duration.zero,
-        );
+        messagingConfig.defaultRetryPolicy;
   }
 
   NatsJetStreamConfig _requireJetStreamConfig() {
@@ -328,7 +411,7 @@ final class NatsJetStreamJobQueue implements DurableJobQueue {
   }
 
   void _ensureConnected() {
-    if (!_connected) {
+    if (!_connected || _closing || !_adapter.isConnected) {
       throw const MessagingConnectionException(
         'NATS JetStream queue is not connected.',
       );
@@ -336,7 +419,7 @@ final class NatsJetStreamJobQueue implements DurableJobQueue {
   }
 
   void _ensureSchedulable(DateTime? runAt) {
-    if (runAt == null || !runAt.isAfter(DateTime.now())) {
+    if (runAt == null || !runAt.isAfter(messagingConfig.now())) {
       return;
     }
 
@@ -352,8 +435,10 @@ final class NatsJetStreamJobQueue implements DurableJobQueue {
     return {
       for (final MapEntry(:key, :value) in headers.toMap().entries)
         if (value != null) key: value.toString(),
-      _contentTypeHeader: encoded.contentType,
-      _schemaVersionHeader: encoded.schemaVersion.toString(),
+      PodBusWireHeaders.contentType: encoded.contentType,
+      PodBusWireHeaders.schemaVersion: encoded.schemaVersion.toString(),
+      if (encoded.messageType != null)
+        PodBusWireHeaders.messageType: encoded.messageType!,
     };
   }
 
@@ -368,31 +453,38 @@ final class NatsJetStreamJobQueue implements DurableJobQueue {
     return headers.copyWith(
       custom: {
         ...headers.custom,
-        _retryMaxAttemptsHeader: retryPolicy.maxAttempts.toString(),
-        _retryInitialDelayMicrosHeader: retryPolicy.initialDelay.inMicroseconds
+        PodBusWireHeaders.retryMaxAttempts: retryPolicy.maxAttempts.toString(),
+        PodBusWireHeaders.retryInitialDelayMicros: retryPolicy
+            .initialDelay
+            .inMicroseconds
             .toString(),
-        _retryMaxDelayMicrosHeader: retryPolicy.maxDelay.inMicroseconds
+        PodBusWireHeaders.retryMaxDelayMicros: retryPolicy
+            .maxDelay
+            .inMicroseconds
             .toString(),
-        _retryBackoffMultiplierHeader: retryPolicy.backoffMultiplier.toString(),
-        _retryJitterHeader: retryPolicy.jitter.toString(),
+        PodBusWireHeaders.retryBackoffMultiplier: retryPolicy.backoffMultiplier
+            .toString(),
+        PodBusWireHeaders.retryJitter: retryPolicy.jitter.toString(),
       },
     );
   }
 
   RetryPolicy? _retryPolicyFromHeaders(MessageHeaders headers) {
     final maxAttempts = int.tryParse(
-      headers.custom[_retryMaxAttemptsHeader] ?? '',
+      headers.custom[PodBusWireHeaders.retryMaxAttempts] ?? '',
     );
     final initialDelayMicros = int.tryParse(
-      headers.custom[_retryInitialDelayMicrosHeader] ?? '',
+      headers.custom[PodBusWireHeaders.retryInitialDelayMicros] ?? '',
     );
     final maxDelayMicros = int.tryParse(
-      headers.custom[_retryMaxDelayMicrosHeader] ?? '',
+      headers.custom[PodBusWireHeaders.retryMaxDelayMicros] ?? '',
     );
     final backoffMultiplier = double.tryParse(
-      headers.custom[_retryBackoffMultiplierHeader] ?? '',
+      headers.custom[PodBusWireHeaders.retryBackoffMultiplier] ?? '',
     );
-    final jitter = double.tryParse(headers.custom[_retryJitterHeader] ?? '');
+    final jitter = double.tryParse(
+      headers.custom[PodBusWireHeaders.retryJitter] ?? '',
+    );
 
     if (maxAttempts == null ||
         initialDelayMicros == null ||
@@ -479,6 +571,17 @@ final class _NatsJetStreamWorker<T> implements Worker {
       } on Object catch (error, stackTrace) {
         lastError = error;
         lastStackTrace = stackTrace;
+        queue.messagingConfig.log(
+          MessagingLogLevel.error,
+          'NATS JetStream worker loop failed.',
+          error: error,
+          stackTrace: stackTrace,
+          attributes: {
+            'transport': 'nats-jetstream',
+            'topic': topic,
+            'consumer': consumerName,
+          },
+        );
         await Future<void>.delayed(const Duration(milliseconds: 200));
       }
     }
@@ -510,6 +613,10 @@ final class _NatsJetStreamWorker<T> implements Worker {
       if (!context.completed) {
         await context.ack();
       }
+      queue.messagingConfig.recordMetric(
+        'podbus.jobs.completed',
+        attributes: {'transport': 'nats-jetstream', 'topic': topic},
+      );
     } on Object catch (error, stackTrace) {
       final parsedHeaders = headers;
       final parsedRetryPolicy = effectiveRetryPolicy;

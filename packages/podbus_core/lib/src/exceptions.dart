@@ -32,13 +32,32 @@ final class MessagingConnectionException extends MessagingException {
 final class MessagingTimeoutException extends MessagingException {
   const MessagingTimeoutException(
     super.message, {
+    this.timeout,
+    super.cause,
+    super.stackTrace,
+  });
+
+  final Duration? timeout;
+}
+
+final class MessagingUnsupportedException extends MessagingException {
+  const MessagingUnsupportedException(
+    super.message, {
     super.cause,
     super.stackTrace,
   });
 }
 
-final class MessagingUnsupportedException extends MessagingException {
-  const MessagingUnsupportedException(
+final class MessagingAuthenticationException extends MessagingException {
+  const MessagingAuthenticationException(
+    super.message, {
+    super.cause,
+    super.stackTrace,
+  });
+}
+
+final class MessagingRateLimitException extends MessagingException {
+  const MessagingRateLimitException(
     super.message, {
     super.cause,
     super.stackTrace,

@@ -1,10 +1,10 @@
-// ignore_for_file: prefer_initializing_formals
-
 import 'dart:async';
 import 'dart:collection';
 
 import 'package:uuid/uuid.dart';
 
+import 'capabilities.dart';
+import 'config.dart';
 import 'durable_job_queue.dart';
 import 'exceptions.dart';
 import 'headers.dart';
@@ -12,38 +12,83 @@ import 'health.dart';
 import 'idempotency_store.dart';
 import 'message_context.dart';
 import 'policies.dart';
+import 'wire_protocol.dart';
 
 final class InMemoryDurableJobQueue implements DurableJobQueue {
   InMemoryDurableJobQueue({
+    MessagingConfig? messagingConfig,
     IdempotencyStore? idempotencyStore,
-    Duration idempotencyTtl = const Duration(hours: 24),
+    this._idempotencyTtl = const Duration(hours: 24),
     Uuid? uuid,
-  }) : _idempotencyStore = idempotencyStore,
-       _idempotencyTtl = idempotencyTtl,
+  }) : messagingConfig = messagingConfig ?? MessagingConfig(),
+       _idempotencyStore =
+           idempotencyStore ?? messagingConfig?.idempotencyStore,
        _uuid = uuid ?? const Uuid();
 
+  static const _capabilities = MessagingCapabilities({
+    MessagingCapability.durableJobs,
+    MessagingCapability.delayedDelivery,
+    MessagingCapability.retries,
+    MessagingCapability.deadLettering,
+    MessagingCapability.idempotentPublish,
+    MessagingCapability.manualAcknowledgement,
+    MessagingCapability.gracefulShutdown,
+  });
+
+  final MessagingConfig messagingConfig;
   final IdempotencyStore? _idempotencyStore;
   final Duration _idempotencyTtl;
   final Uuid _uuid;
   final Map<String, Queue<_QueuedJob>> _jobsByTopic = {};
   final List<_WorkerBinding> _workers = [];
   final Map<String, int> _workerOffsets = {};
+  final Set<Future<void>> _activeTasks = {};
+  final Set<Timer> _timers = {};
   var _connected = false;
+  var _closing = false;
+
+  @override
+  MessagingCapabilities get capabilities => _capabilities;
 
   @override
   Future<void> connect() async {
+    _closing = false;
     _connected = true;
     await _drainAll();
   }
 
   @override
   Future<void> close({Duration? timeout}) async {
+    if (!_connected && !_closing) {
+      return;
+    }
+    _closing = true;
     _connected = false;
-    _jobsByTopic.clear();
+    for (final timer in _timers.toList()) {
+      timer.cancel();
+    }
+    _timers.clear();
+
     for (final worker in _workers.toList()) {
       await worker.close();
     }
+
+    final effectiveTimeout = timeout ?? messagingConfig.shutdownTimeout;
+    if (_activeTasks.isNotEmpty) {
+      await Future.wait(_activeTasks.toList()).timeout(
+        effectiveTimeout,
+        onTimeout: () {
+          throw MessagingTimeoutException(
+            'In-memory job queue did not drain within $effectiveTimeout.',
+          );
+        },
+      );
+    }
+
+    _jobsByTopic.clear();
     _workers.clear();
+    _workerOffsets.clear();
+    _closing = false;
   }
 
   @override
@@ -60,24 +105,41 @@ final class InMemoryDurableJobQueue implements DurableJobQueue {
     final effectiveHeaders = (headers ?? MessageHeaders()).copyWith(
       idempotencyKey: idempotencyKey,
     );
+    messagingConfig.limits.validateHeaders(effectiveHeaders.toMap());
     final key = idempotencyKey ?? effectiveHeaders.idempotencyKey;
+    var claimed = false;
     if (key != null && _idempotencyStore != null) {
-      final claimed = await _idempotencyStore.claim(key, ttl: _idempotencyTtl);
+      claimed = await _idempotencyStore.claim(key, ttl: _idempotencyTtl);
       if (!claimed) {
+        messagingConfig.recordMetric(
+          'podbus.jobs.deduplicated',
+          attributes: {'transport': 'memory', 'topic': topic},
+        );
         return;
       }
     }
 
-    final job = _QueuedJob(
-      id: _uuid.v4(),
-      topic: topic,
-      payload: payload,
-      headers: effectiveHeaders,
-      runAt: runAt,
-      enqueueRetryPolicy: retryPolicy,
-    );
-    _jobsByTopic.putIfAbsent(topic, Queue.new).add(job);
-    await _drainTopic(topic);
+    try {
+      final job = _QueuedJob(
+        id: _uuid.v4(),
+        topic: topic,
+        payload: payload,
+        headers: effectiveHeaders,
+        runAt: runAt,
+        enqueueRetryPolicy: retryPolicy,
+      );
+      _jobsByTopic.putIfAbsent(topic, Queue.new).add(job);
+      await _drainTopic(topic);
+      messagingConfig.recordMetric(
+        'podbus.jobs.enqueued',
+        attributes: {'transport': 'memory', 'topic': topic},
+      );
+    } on Object {
+      if (claimed && key != null && _idempotencyStore != null) {
+        await _idempotencyStore.release(key);
+      }
+      rethrow;
+    }
   }
 
   @override
@@ -118,12 +180,20 @@ final class InMemoryDurableJobQueue implements DurableJobQueue {
   Future<HealthCheckResult> healthCheck() async {
     if (!_connected) {
       return HealthCheckResult.unhealthy(
-        message: 'In-memory durable queue is not connected.',
+        message: _closing
+            ? 'In-memory durable queue is draining.'
+            : 'In-memory durable queue is not connected.',
+        details: {'activeTasks': _activeTasks.length},
       );
     }
     return HealthCheckResult.healthy(
       message: 'In-memory durable queue is connected.',
-      details: {'workers': _workers.length, 'topics': _jobsByTopic.length},
+      details: {
+        'workers': _workers.length,
+        'topics': _jobsByTopic.length,
+        'activeTasks': _activeTasks.length,
+        'scheduledTasks': _timers.length,
+      },
     );
   }
 
@@ -134,7 +204,7 @@ final class InMemoryDurableJobQueue implements DurableJobQueue {
   }
 
   Future<void> _drainTopic(String topic) async {
-    if (!_connected) {
+    if (!_connected || _closing) {
       return;
     }
 
@@ -151,14 +221,14 @@ final class InMemoryDurableJobQueue implements DurableJobQueue {
 
       final job = queue.removeFirst();
       final runAt = job.runAt;
-      if (runAt != null && runAt.isAfter(DateTime.now())) {
+      final now = messagingConfig.now();
+      if (runAt != null && runAt.isAfter(now)) {
         queue.addFirst(job);
-        final delay = runAt.difference(DateTime.now());
-        unawaited(Future<void>.delayed(delay, () => _drainTopic(topic)));
+        _schedule(runAt.difference(now), () => _drainTopic(topic));
         return;
       }
 
-      unawaited(_process(worker, job));
+      _startTask(_process(worker, job));
     }
   }
 
@@ -181,15 +251,12 @@ final class InMemoryDurableJobQueue implements DurableJobQueue {
 
   Future<void> _process(_WorkerBinding worker, _QueuedJob job) async {
     worker.active++;
+    final startedAt = messagingConfig.now();
     final attempt = job.attempt + 1;
     final retryPolicy =
         worker.retryPolicy ??
         job.enqueueRetryPolicy ??
-        RetryPolicy(
-          maxAttempts: 1,
-          initialDelay: Duration.zero,
-          maxDelay: Duration.zero,
-        );
+        messagingConfig.defaultRetryPolicy;
 
     final headerAttempt = job.headers.attempt > attempt
         ? job.headers.attempt
@@ -210,6 +277,10 @@ final class InMemoryDurableJobQueue implements DurableJobQueue {
       if (!context.completed) {
         await context.ack();
       }
+      messagingConfig.recordMetric(
+        'podbus.jobs.completed',
+        attributes: {'transport': 'memory', 'topic': job.topic},
+      );
     } on Object catch (error, stackTrace) {
       await _handleFailure(
         worker,
@@ -221,6 +292,11 @@ final class InMemoryDurableJobQueue implements DurableJobQueue {
       );
     } finally {
       worker.active--;
+      messagingConfig.recordDuration(
+        'podbus.job.duration',
+        messagingConfig.now().difference(startedAt),
+        attributes: {'transport': 'memory', 'topic': job.topic},
+      );
       await _drainTopic(job.topic);
     }
   }
@@ -233,36 +309,137 @@ final class InMemoryDurableJobQueue implements DurableJobQueue {
     Object error,
     StackTrace stackTrace,
   ) async {
-    if (attempt < retryPolicy.maxAttempts) {
+    final retryable = messagingConfig.shouldRetry(error);
+    if (retryable && attempt < retryPolicy.maxAttempts) {
       final next = job.copyForAttempt(attempt);
       final delay = retryPolicy.delayForAttempt(attempt);
-      unawaited(
-        Future<void>.delayed(delay, () async {
-          if (!_connected) {
-            return;
-          }
-          _jobsByTopic.putIfAbsent(job.topic, Queue.new).add(next);
-          await _drainTopic(job.topic);
-        }),
+      messagingConfig.recordMetric(
+        'podbus.jobs.retried',
+        attributes: {
+          'transport': 'memory',
+          'topic': job.topic,
+          'attempt': attempt,
+        },
       );
+      _schedule(delay, () async {
+        if (!_connected || _closing) {
+          return;
+        }
+        _jobsByTopic.putIfAbsent(job.topic, Queue.new).add(next);
+        await _drainTopic(job.topic);
+      });
       return;
     }
 
     final policy = worker.deadLetterPolicy;
-    if (policy.enabled && policy.destination != null) {
-      await enqueue(
-        policy.destination!,
-        job.payload,
-        headers: job.headers.copyWith(attempt: attempt),
+    if (policy.enabled) {
+      await _publishDeadLetter(
+        worker,
+        job,
+        attempt,
+        error: error,
+        stackTrace: stackTrace,
       );
       return;
     }
 
-    Error.throwWithStackTrace(error, stackTrace);
+    messagingConfig.log(
+      MessagingLogLevel.error,
+      'Job failed without a dead-letter destination.',
+      error: error,
+      stackTrace: stackTrace,
+      attributes: {
+        'transport': 'memory',
+        'topic': job.topic,
+        'attempt': attempt,
+      },
+    );
+  }
+
+  Future<void> _publishDeadLetter(
+    _WorkerBinding worker,
+    _QueuedJob job,
+    int attempt, {
+    Object? error,
+    StackTrace? stackTrace,
+  }) async {
+    final policy = worker.deadLetterPolicy;
+    if (!policy.enabled) {
+      return;
+    }
+
+    final destination = policy.destination ?? '${worker.topic}.dead-letter';
+    final custom = <String, String>{
+      ...job.headers.custom,
+      PodBusWireHeaders.deadLetterSource: worker.topic,
+      if (!policy.includeOriginalPayload)
+        PodBusWireHeaders.deadLetterPayloadOmitted: 'true',
+      if (policy.includeErrorDetails && error != null)
+        PodBusWireHeaders.deadLetterError: messagingConfig.limits.truncateError(
+          error,
+        ),
+      if (policy.includeErrorDetails && stackTrace != null)
+        PodBusWireHeaders.deadLetterStackTrace: messagingConfig.limits
+            .truncateError(stackTrace),
+    };
+    final deadLetterHeaders = job.headers.withoutIdempotencyKey().copyWith(
+      attempt: attempt,
+      custom: custom,
+    );
+    final payload = policy.includeOriginalPayload
+        ? job.payload
+        : <String, Object?>{
+            'source': job.topic,
+            'messageId': job.id,
+            'payloadIncluded': false,
+          };
+
+    await enqueue(
+      destination,
+      payload,
+      headers: deadLetterHeaders,
+      retryPolicy: RetryPolicy(
+        maxAttempts: 1,
+        initialDelay: Duration.zero,
+        maxDelay: Duration.zero,
+      ),
+    );
+    messagingConfig.recordMetric(
+      'podbus.jobs.dead_lettered',
+      attributes: {'transport': 'memory', 'topic': job.topic},
+    );
+  }
+
+  void _startTask(Future<void> future) {
+    _activeTasks.add(future);
+    unawaited(
+      future.then<void>(
+        (_) => _activeTasks.remove(future),
+        onError: (Object error, StackTrace stackTrace) {
+          _activeTasks.remove(future);
+          messagingConfig.log(
+            MessagingLogLevel.error,
+            'Background job processing failed.',
+            error: error,
+            stackTrace: stackTrace,
+            attributes: {'transport': 'memory'},
+          );
+        },
+      ),
+    );
+  }
+
+  void _schedule(Duration delay, Future<void> Function() action) {
+    late final Timer timer;
+    timer = Timer(delay, () {
+      _timers.remove(timer);
+      _startTask(Future<void>.sync(action));
+    });
+    _timers.add(timer);
   }
 
   void _ensureConnected() {
-    if (!_connected) {
+    if (!_connected || _closing) {
       throw const MessagingConnectionException(
         'In-memory durable queue is not connected.',
       );
@@ -415,11 +592,13 @@ final class _InMemoryJobContext implements JobContext {
   @override
   Future<void> deadLetter({Object? error, StackTrace? stackTrace}) async {
     completed = true;
-    final policy = _worker.deadLetterPolicy;
-    if (!policy.enabled || policy.destination == null) {
-      return;
-    }
-    await _queue.enqueue(policy.destination!, _job.payload, headers: headers);
+    await _queue._publishDeadLetter(
+      _worker,
+      _job,
+      attempt,
+      error: error,
+      stackTrace: stackTrace,
+    );
   }
 
   @override
@@ -430,15 +609,13 @@ final class _InMemoryJobContext implements JobContext {
   @override
   Future<void> retry({Duration? delay}) async {
     completed = true;
-    final retryDelay = delay ?? Duration.zero;
-    unawaited(
-      Future<void>.delayed(retryDelay, () async {
-        await _queue.enqueue(
-          topic,
-          _job.payload,
-          headers: headers.incrementAttempt(),
-        );
-      }),
-    );
+    final next = _job.copyForAttempt(attempt);
+    _queue._schedule(delay ?? Duration.zero, () async {
+      if (!_queue._connected || _queue._closing) {
+        return;
+      }
+      _queue._jobsByTopic.putIfAbsent(topic, Queue.new).add(next);
+      await _queue._drainTopic(topic);
+    });
   }
 }

@@ -105,6 +105,18 @@ final class MessageHeaders {
 
   MessageHeaders incrementAttempt() => copyWith(attempt: attempt + 1);
 
+  MessageHeaders withoutIdempotencyKey() {
+    return MessageHeaders(
+      correlationId: correlationId,
+      causationId: causationId,
+      tenantId: tenantId,
+      userId: userId,
+      traceId: traceId,
+      attempt: attempt,
+      custom: custom,
+    );
+  }
+
   Map<String, Object?> toMap() {
     return {
       if (correlationId != null) _correlationId: correlationId,

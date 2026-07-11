@@ -1,7 +1,7 @@
 name: podbus_nats
 description: NATS transport adapter for PodBus.
-version: 0.1.0-dev
-repository: https://github.com/podbus/podbus
+version: 0.1.0-alpha.1
+repository: https://github.com/eukalpia/PodBus
 publish_to: none
 
 environment:

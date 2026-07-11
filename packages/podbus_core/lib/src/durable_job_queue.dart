@@ -1,3 +1,4 @@
+import 'capabilities.dart';
 import 'headers.dart';
 import 'health.dart';
 import 'message_context.dart';
@@ -5,7 +6,8 @@ import 'policies.dart';
 
 typedef JobHandler<T> = Future<void> Function(JobContext context, T payload);
 
-abstract interface class DurableJobQueue {
+abstract interface class DurableJobQueue
+    implements MessagingCapabilityProvider {
   Future<void> connect();
 
   Future<void> close({Duration? timeout});

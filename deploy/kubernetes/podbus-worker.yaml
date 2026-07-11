@@ -1,0 +1,125 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: podbus-worker
+  labels:
+    app.kubernetes.io/name: podbus-worker
+spec:
+  replicas: 3
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: podbus-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: podbus-worker
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: /metrics
+    spec:
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: registry.example.com/podbus-worker:replace-me
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: health
+              containerPort: 8080
+          env:
+            - name: PODBUS_SHUTDOWN_TIMEOUT_SECONDS
+              value: "30"
+            - name: NATS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: podbus-broker
+                  key: nats-url
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: podbus-database
+                  key: url
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: health
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: health
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 6
+          startupProbe:
+            httpGet:
+              path: /live
+              port: health
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 30
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - wget -qO- --post-data='' http://127.0.0.1:8080/drain || true; sleep 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            runAsUser: 10001
+            runAsGroup: 10001
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: podbus-worker
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: podbus-worker
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: podbus-worker
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: podbus-worker
+  minReplicas: 3
+  maxReplicas: 20
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 65

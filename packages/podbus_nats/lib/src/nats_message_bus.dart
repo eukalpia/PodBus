@@ -8,32 +8,75 @@ import 'nats_client_adapter.dart';
 final class NatsMessageBus implements MessageBus {
   NatsMessageBus({
     required this.config,
+    MessagingConfig? messagingConfig,
     NatsClientAdapter? clientAdapter,
     MessageCodec? codec,
-  }) : _client = clientAdapter ?? DartNatsClientAdapter(),
-       _codec = codec ?? const JsonMessageCodec();
+  }) : messagingConfig = messagingConfig ?? MessagingConfig(codec: codec),
+       _client = clientAdapter ?? DartNatsClientAdapter();
 
-  static const _contentTypeHeader = 'podbus-content-type';
-  static const _schemaVersionHeader = 'podbus-schema-version';
+  static const _capabilities = MessagingCapabilities({
+    MessagingCapability.publishSubscribe,
+    MessagingCapability.queueGroups,
+    MessagingCapability.requestReply,
+    MessagingCapability.typedPayloads,
+    MessagingCapability.gracefulShutdown,
+  });
 
   final NatsMessagingConfig config;
+  final MessagingConfig messagingConfig;
   final NatsClientAdapter _client;
-  final MessageCodec _codec;
   final List<_NatsSubscription> _subscriptions = [];
+  var _closing = false;
+
+  MessageCodec get _codec => messagingConfig.codec;
+
+  @override
+  MessagingCapabilities get capabilities => _capabilities;
 
   @override
   Future<void> connect() async {
+    _closing = false;
     await _client.connect(config);
+    messagingConfig.log(
+      MessagingLogLevel.info,
+      'NATS message bus connected.',
+      attributes: {'transport': 'nats'},
+    );
   }
 
   @override
   Future<void> close({Duration? timeout}) async {
-    await _client.drain();
-    for (final subscription in _subscriptions.toList()) {
-      await subscription.close();
+    if (_closing) {
+      return;
     }
-    _subscriptions.clear();
-    await _client.close();
+    _closing = true;
+    final effectiveTimeout = timeout ?? messagingConfig.shutdownTimeout;
+    Object? failure;
+    StackTrace? failureStackTrace;
+
+    try {
+      await Future.wait([
+        for (final subscription in _subscriptions.toList())
+          subscription.close(),
+      ]).timeout(effectiveTimeout);
+      _subscriptions.clear();
+      await _client.drain().timeout(effectiveTimeout);
+    } on Object catch (error, stackTrace) {
+      failure = error;
+      failureStackTrace = stackTrace;
+    } finally {
+      try {
+        await _client.close();
+      } on Object catch (error, stackTrace) {
+        failure ??= error;
+        failureStackTrace ??= stackTrace;
+      }
+      _closing = false;
+    }
+
+    if (failure != null) {
+      Error.throwWithStackTrace(failure, failureStackTrace!);
+    }
   }
 
   @override
@@ -42,11 +85,20 @@ final class NatsMessageBus implements MessageBus {
     T payload, {
     MessageHeaders? headers,
   }) async {
+    _ensureAvailable();
+    final startedAt = messagingConfig.now();
     final encoded = await _codec.encode(payload);
-    await _client.publish(
-      subject,
-      encoded.bytes,
-      headers: _headersFor(headers ?? MessageHeaders(), encoded),
+    final wireHeaders = _headersFor(headers ?? MessageHeaders(), encoded);
+    messagingConfig.validateRawOutbound(encoded.bytes, wireHeaders);
+    await _client.publish(subject, encoded.bytes, headers: wireHeaders);
+    messagingConfig.recordMetric(
+      'podbus.messages.published',
+      attributes: {'transport': 'nats', 'subject': subject},
+    );
+    messagingConfig.recordDuration(
+      'podbus.publish.duration',
+      messagingConfig.now().difference(startedAt),
+      attributes: {'transport': 'nats', 'subject': subject},
     );
   }
 
@@ -54,12 +106,22 @@ final class NatsMessageBus implements MessageBus {
   Future<Subscription> subscribe<T>(
     String subject, {
     String? queueGroup,
+    int concurrency = 1,
     required MessageHandler<T> handler,
   }) async {
+    _ensureAvailable();
+    if (concurrency < 1) {
+      throw const MessagingConfigurationException(
+        'Subscription concurrency must be greater than zero.',
+      );
+    }
+
     final natsSubscription = _client.subscribe(subject, queueGroup: queueGroup);
     late final _NatsSubscription subscription;
     subscription = _NatsSubscription(
       natsSubscription,
+      concurrency: concurrency,
+      messagingConfig: messagingConfig,
       onClose: () => _subscriptions.remove(subscription),
     );
     _subscriptions.add(subscription);
@@ -68,9 +130,7 @@ final class NatsMessageBus implements MessageBus {
       final decoded = await _decode<T>(message);
       final context = _NatsMessageContext(
         message: message,
-        codec: _codec,
-        contentTypeHeader: _contentTypeHeader,
-        schemaVersionHeader: _schemaVersionHeader,
+        messagingConfig: messagingConfig,
       );
       await handler(context, decoded);
     });
@@ -85,12 +145,15 @@ final class NatsMessageBus implements MessageBus {
     MessageHeaders? headers,
     Duration? timeout,
   }) async {
+    _ensureAvailable();
     final encoded = await _codec.encode(payload);
+    final wireHeaders = _headersFor(headers ?? MessageHeaders(), encoded);
+    messagingConfig.validateRawOutbound(encoded.bytes, wireHeaders);
     final response = await _client.request(
       subject,
       encoded.bytes,
       timeout: timeout ?? config.requestTimeout,
-      headers: _headersFor(headers ?? MessageHeaders(), encoded),
+      headers: wireHeaders,
     );
     return _decode<TResponse>(response);
   }
@@ -99,34 +162,59 @@ final class NatsMessageBus implements MessageBus {
   Future<HealthCheckResult> healthCheck() async {
     if (!_client.isConnected) {
       return HealthCheckResult.unhealthy(
-        message: 'NATS client is not connected.',
+        message: _closing
+            ? 'NATS client is draining.'
+            : 'NATS client is not connected.',
+        details: {'subscriptions': _subscriptions.length},
       );
     }
 
+    final subscriptionErrors = [
+      for (final subscription in _subscriptions)
+        if (subscription.lastError != null) subscription.lastError.toString(),
+    ];
+
     try {
       await _client.flush();
-      return HealthCheckResult.healthy(message: 'NATS client is connected.');
+      if (subscriptionErrors.isNotEmpty) {
+        return HealthCheckResult.degraded(
+          message: 'NATS is connected, but a subscription reported an error.',
+          details: {
+            'subscriptions': _subscriptions.length,
+            'subscriptionErrors': subscriptionErrors,
+          },
+        );
+      }
+      return HealthCheckResult.healthy(
+        message: 'NATS client is connected.',
+        details: {'subscriptions': _subscriptions.length},
+      );
     } on Object catch (error, stackTrace) {
-      return HealthCheckResult(
-        status: HealthStatus.unhealthy,
-        checkedAt: DateTime.now(),
+      return HealthCheckResult.unhealthy(
         message: 'NATS health check failed.',
         details: {
-          'error': error.toString(),
-          'stackTrace': stackTrace.toString(),
+          'error': messagingConfig.limits.truncateError(error),
+          'stackTrace': messagingConfig.limits.truncateError(stackTrace),
         },
       );
     }
   }
 
   Future<T> _decode<T>(NatsClientMessage message) {
+    messagingConfig.limits.validatePayload(message.bytes);
+    messagingConfig.limits.validateHeaders(message.headers);
     return _codec.decode<T>(
       EncodedMessage(
         bytes: message.bytes,
         contentType:
-            message.headers[_contentTypeHeader] ?? JsonMessageCodec.contentType,
+            message.headers[PodBusWireHeaders.contentType] ??
+            JsonMessageCodec.contentType,
         schemaVersion:
-            int.tryParse(message.headers[_schemaVersionHeader] ?? '') ?? 1,
+            int.tryParse(
+              message.headers[PodBusWireHeaders.schemaVersion] ?? '',
+            ) ??
+            1,
+        messageType: message.headers[PodBusWireHeaders.messageType],
       ),
     );
   }
@@ -138,24 +226,85 @@ final class NatsMessageBus implements MessageBus {
     return {
       for (final MapEntry(:key, :value) in headers.toMap().entries)
         if (value != null) key: value.toString(),
-      _contentTypeHeader: encoded.contentType,
-      _schemaVersionHeader: encoded.schemaVersion.toString(),
+      PodBusWireHeaders.contentType: encoded.contentType,
+      PodBusWireHeaders.schemaVersion: encoded.schemaVersion.toString(),
+      if (encoded.messageType != null)
+        PodBusWireHeaders.messageType: encoded.messageType!,
     };
+  }
+
+  void _ensureAvailable() {
+    if (_closing || !_client.isConnected) {
+      throw const MessagingConnectionException(
+        'NATS message bus is not connected.',
+      );
+    }
   }
 }
 
 final class _NatsSubscription implements Subscription {
-  _NatsSubscription(this._delegate, {required this.onClose});
+  _NatsSubscription(
+    this._delegate, {
+    required this.concurrency,
+    required this.messagingConfig,
+    required this.onClose,
+  });
 
   final NatsClientSubscription _delegate;
+  final int concurrency;
+  final MessagingConfig messagingConfig;
   final void Function() onClose;
+  final Set<Future<void>> _active = {};
   StreamSubscription<NatsClientMessage>? _streamSubscription;
+  Object? lastError;
+  StackTrace? lastStackTrace;
   var _closed = false;
 
   void listen(Future<void> Function(NatsClientMessage message) onMessage) {
-    _streamSubscription = _delegate.messages.listen((message) {
-      unawaited(onMessage(message));
-    });
+    _streamSubscription = _delegate.messages.listen(
+      (message) {
+        if (_closed) {
+          return;
+        }
+        if (_active.length >= concurrency) {
+          _streamSubscription?.pause();
+        }
+        late final Future<void> task;
+        task = Future<void>.sync(() => onMessage(message))
+            .then<void>(
+              (_) {},
+              onError: (Object error, StackTrace stackTrace) {
+                lastError = error;
+                lastStackTrace = stackTrace;
+                messagingConfig.log(
+                  MessagingLogLevel.error,
+                  'NATS subscription handler failed.',
+                  error: error,
+                  stackTrace: stackTrace,
+                  attributes: {'transport': 'nats'},
+                );
+              },
+            )
+            .whenComplete(() {
+              _active.remove(task);
+              if (!_closed && _active.length < concurrency) {
+                _streamSubscription?.resume();
+              }
+            });
+        _active.add(task);
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        lastError = error;
+        lastStackTrace = stackTrace;
+        messagingConfig.log(
+          MessagingLogLevel.error,
+          'NATS subscription stream failed.',
+          error: error,
+          stackTrace: stackTrace,
+          attributes: {'transport': 'nats'},
+        );
+      },
+    );
   }
 
   @override
@@ -166,6 +315,11 @@ final class _NatsSubscription implements Subscription {
     _closed = true;
     await _streamSubscription?.cancel();
     await _delegate.close();
+    if (_active.isNotEmpty) {
+      await Future.wait(
+        _active.toList(),
+      ).timeout(messagingConfig.shutdownTimeout);
+    }
     onClose();
   }
 }
@@ -173,18 +327,16 @@ final class _NatsSubscription implements Subscription {
 final class _NatsMessageContext implements MessageContext {
   _NatsMessageContext({
     required NatsClientMessage message,
-    required this._codec,
-    required this._contentTypeHeader,
-    required this._schemaVersionHeader,
+    required this.messagingConfig,
   }) : subject = message.subject,
        headers = MessageHeaders.fromMap(message.headers),
        rawMessage = message,
        _message = message;
 
   final NatsClientMessage _message;
-  final MessageCodec _codec;
-  final String _contentTypeHeader;
-  final String _schemaVersionHeader;
+  final MessagingConfig messagingConfig;
+
+  MessageCodec get _codec => messagingConfig.codec;
 
   @override
   final String subject;
@@ -215,16 +367,17 @@ final class _NatsMessageContext implements MessageContext {
   @override
   Future<void> reply<T>(T payload, {MessageHeaders? headers}) async {
     final encoded = await _codec.encode(payload);
-    final sent = await _message.respond(
-      encoded.bytes,
-      headers: {
-        for (final MapEntry(:key, :value)
-            in (headers ?? MessageHeaders()).toMap().entries)
-          if (value != null) key: value.toString(),
-        _contentTypeHeader: encoded.contentType,
-        _schemaVersionHeader: encoded.schemaVersion.toString(),
-      },
-    );
+    final wireHeaders = {
+      for (final MapEntry(:key, :value)
+          in (headers ?? MessageHeaders()).toMap().entries)
+        if (value != null) key: value.toString(),
+      PodBusWireHeaders.contentType: encoded.contentType,
+      PodBusWireHeaders.schemaVersion: encoded.schemaVersion.toString(),
+      if (encoded.messageType != null)
+        PodBusWireHeaders.messageType: encoded.messageType!,
+    };
+    messagingConfig.validateRawOutbound(encoded.bytes, wireHeaders);
+    final sent = await _message.respond(encoded.bytes, headers: wireHeaders);
     if (!sent) {
       throw const MessagingUnsupportedException(
         'NATS message does not have a reply subject.',

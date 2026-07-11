@@ -1,0 +1,128 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  codeql-actions:
+    name: CodeQL workflow scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: github/codeql-action/init@02c5e83432fe5497fd85b873b6c9f16a8578e1d9 # v3
+        with:
+          languages: actions
+          queries: security-extended
+      - uses: github/codeql-action/analyze@02c5e83432fe5497fd85b873b6c9f16a8578e1d9 # v3
+        with:
+          category: /language:actions
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
+        with:
+          sdk: 3.12.0
+      - name: Resolve and snapshot Dart dependencies
+        run: |
+          dart pub get
+          mkdir -p dependency-review
+          dart pub deps --json > dependency-review/dart-dependencies.json
+          dart pub outdated --show-all > dependency-review/dart-outdated.txt
+      - id: review
+        continue-on-error: true
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
+        with:
+          fail-on-severity: moderate
+          comment-summary-in-pr: always
+          license-check: true
+          deny-licenses: GPL-2.0, GPL-3.0, AGPL-1.0, AGPL-3.0
+          retry-on-snapshot-warnings: true
+          retry-on-snapshot-warnings-timeout: 300
+      - name: Save dependency-review diagnostics
+        if: always()
+        env:
+          COMMENT_CONTENT: ${{ steps.review.outputs.comment-content }}
+          DEPENDENCY_CHANGES: ${{ steps.review.outputs.dependency-changes }}
+          VULNERABLE_CHANGES: ${{ steps.review.outputs.vulnerable-changes }}
+          INVALID_LICENSE_CHANGES: ${{ steps.review.outputs.invalid-license-changes }}
+          DENIED_CHANGES: ${{ steps.review.outputs.denied-changes }}
+          REVIEW_OUTCOME: ${{ steps.review.outcome }}
+        run: |
+          mkdir -p dependency-review
+          printf '%s\n' "$COMMENT_CONTENT" > dependency-review/summary.md
+          printf '%s\n' "$DEPENDENCY_CHANGES" > dependency-review/dependency-changes.json
+          printf '%s\n' "$VULNERABLE_CHANGES" > dependency-review/vulnerable-changes.json
+          printf '%s\n' "$INVALID_LICENSE_CHANGES" > dependency-review/invalid-license-changes.json
+          printf '%s\n' "$DENIED_CHANGES" > dependency-review/denied-changes.json
+          printf '%s\n' "$REVIEW_OUTCOME" > dependency-review/action-outcome.txt
+          if [ "$REVIEW_OUTCOME" = failure ]; then
+            echo "::warning::GitHub dependency review could not evaluate the dependency graph. Enable the repository dependency graph; the Dart lockfile snapshot remains attached."
+          fi
+      - name: Enforce reported dependency findings
+        env:
+          VULNERABLE_CHANGES: ${{ steps.review.outputs.vulnerable-changes }}
+          INVALID_LICENSE_CHANGES: ${{ steps.review.outputs.invalid-license-changes }}
+          DENIED_CHANGES: ${{ steps.review.outputs.denied-changes }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          failed = False
+          for key in (
+              'VULNERABLE_CHANGES',
+              'INVALID_LICENSE_CHANGES',
+              'DENIED_CHANGES',
+          ):
+              raw = os.environ.get(key, '').strip()
+              if not raw:
+                  continue
+              try:
+                  value = json.loads(raw)
+              except json.JSONDecodeError:
+                  value = raw
+              if value not in (None, [], {}, ''):
+                  print(f'{key} contains blocked dependency findings: {raw}')
+                  failed = True
+          if failed:
+              sys.exit(1)
+          PY
+      - name: Upload dependency-review diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dependency-review-diagnostics
+          path: dependency-review
+          if-no-files-found: error
+          retention-days: 14
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

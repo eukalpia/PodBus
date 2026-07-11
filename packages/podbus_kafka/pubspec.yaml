@@ -1,7 +1,7 @@
 name: podbus_kafka
 description: Experimental Kafka event-log adapter for PodBus.
-version: 0.1.0-dev
-repository: https://github.com/podbus/podbus
+version: 0.1.0-alpha.1
+repository: https://github.com/eukalpia/PodBus
 publish_to: none
 
 environment:
@@ -11,7 +11,6 @@ resolution: workspace
 
 dependencies:
   ffi: ^2.1.4
-  kafka_dart: ^1.0.2-alpha
   meta: ^1.17.0
   podbus_core:
     path: ../podbus_core

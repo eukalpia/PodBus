@@ -17,6 +17,24 @@ void main() {
       expect(policy.delayForAttempt(4), Duration(milliseconds: 350));
     });
 
+    test('applies bounded deterministic jitter', () {
+      final policy = RetryPolicy(
+        maxAttempts: 3,
+        initialDelay: const Duration(milliseconds: 100),
+        maxDelay: const Duration(seconds: 1),
+        jitter: 0.2,
+      );
+
+      expect(
+        policy.delayForAttempt(1, randomValue: 0),
+        const Duration(milliseconds: 80),
+      );
+      expect(
+        policy.delayForAttempt(1, randomValue: 1),
+        const Duration(milliseconds: 120),
+      );
+    });
+
     test('validates retry configuration', () {
       expect(
         () => RetryPolicy(

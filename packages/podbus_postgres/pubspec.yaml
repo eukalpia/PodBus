@@ -1,0 +1,20 @@
+name: podbus_postgres
+description: PostgreSQL outbox, inbox, and persistent idempotency for PodBus.
+version: 0.1.0-alpha.1
+repository: https://github.com/eukalpia/PodBus
+publish_to: none
+
+environment:
+  sdk: ^3.12.0
+
+resolution: workspace
+
+dependencies:
+  podbus_core:
+    path: ../podbus_core
+  postgres: ^3.5.12
+  uuid: ^4.5.1
+
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.26.0

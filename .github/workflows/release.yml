@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    name: Verify and publish release artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: release
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
+        with:
+          sdk: 3.12.0
+      - name: Resolve dependencies
+        run: dart pub get
+      - name: Verify source
+        run: |
+          dart format --output=none --set-exit-if-changed .
+          dart analyze .
+          dart run tool/verify_release.dart --check
+          dart test \
+            packages/podbus_core/test \
+            packages/podbus_nats/test \
+            packages/podbus_rabbitmq/test \
+            packages/podbus_kafka/test \
+            packages/podbus_postgres/test \
+            packages/podbus_observability/test \
+            packages/podbus_serverpod/test \
+            --exclude-tags=integration
+      - name: Verify tag matches package version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(awk '/^version:/{print $2; exit}' packages/podbus_core/pubspec.yaml)
+          expected="v${version}"
+          if [[ "$GITHUB_REF_NAME" != "$expected" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match package version $expected." >&2
+            exit 1
+          fi
+      - name: Build source archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="PodBus-${GITHUB_REF_NAME}"
+          git archive --format=tar.gz --prefix="${prefix}/" -o "${prefix}.tar.gz" HEAD
+          git archive --format=zip --prefix="${prefix}/" -o "${prefix}.zip" HEAD
+          sha256sum "${prefix}.tar.gz" "${prefix}.zip" > SHA256SUMS
+      - name: Generate SPDX SBOM
+        run: >-
+          dart run tool/generate_sbom.dart
+          --name PodBus-${{ github.ref_name }}
+          --output PodBus-${{ github.ref_name }}.spdx.json
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: |
+            PodBus-${{ github.ref_name }}.tar.gz
+            PodBus-${{ github.ref_name }}.zip
+            PodBus-${{ github.ref_name }}.spdx.json
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            PodBus-${{ github.ref_name }}.tar.gz
+            PodBus-${{ github.ref_name }}.zip
+            PodBus-${{ github.ref_name }}.spdx.json
+            SHA256SUMS

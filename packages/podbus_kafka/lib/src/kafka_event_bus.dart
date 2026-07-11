@@ -11,21 +11,34 @@ import 'kafka_adapter.dart';
 final class KafkaEventBus implements MessageBus, DurableJobQueue {
   KafkaEventBus({
     required this.config,
+    MessagingConfig? messagingConfig,
     KafkaAdapter? adapter,
     MessageCodec? codec,
-  }) : _adapter = adapter ?? DartKafkaAdapter(),
-       _codec = codec ?? const JsonMessageCodec();
+  }) : messagingConfig = messagingConfig ?? MessagingConfig(codec: codec),
+       _adapter = adapter ?? DartKafkaAdapter();
 
-  static const _deadLetterSourceHeader = 'podbus-dead-letter-source';
-  static const _deadLetterErrorHeader = 'podbus-dead-letter-error';
-  static const _deadLetterStackTraceHeader = 'podbus-dead-letter-stack-trace';
+  static const _capabilities = MessagingCapabilities({
+    MessagingCapability.publishSubscribe,
+    MessagingCapability.queueGroups,
+    MessagingCapability.manualAcknowledgement,
+    MessagingCapability.durableJobs,
+    MessagingCapability.deadLettering,
+    MessagingCapability.typedPayloads,
+    MessagingCapability.gracefulShutdown,
+  });
 
   final KafkaMessagingConfig config;
+  final MessagingConfig messagingConfig;
   final KafkaAdapter _adapter;
-  final MessageCodec _codec;
   final List<_KafkaSubscription> _subscriptions = [];
   final List<_KafkaWorker> _workers = [];
   var _connected = false;
+  var _closing = false;
+
+  MessageCodec get _codec => messagingConfig.codec;
+
+  @override
+  MessagingCapabilities get capabilities => _capabilities;
 
   @override
   Future<void> connect() async {
@@ -34,25 +47,54 @@ final class KafkaEventBus implements MessageBus, DurableJobQueue {
         'Kafka adapter must be explicitly marked experimental.',
       );
     }
-    await _adapter.connect(config);
-    _connected = true;
+    _closing = false;
+    try {
+      await _adapter.connect(config);
+      _connected = true;
+    } on Object catch (error, stackTrace) {
+      try {
+        await _adapter.close();
+      } on Object {
+        // Preserve the startup failure.
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    }
   }
 
   @override
   Future<void> close({Duration? timeout}) async {
-    _connected = false;
-    final futures = [
-      for (final subscription in _subscriptions.toList()) subscription.close(),
-      for (final worker in _workers.toList()) worker.close(),
-    ];
-    if (timeout == null) {
-      await Future.wait(futures);
-    } else {
-      await Future.wait(futures).timeout(timeout);
+    if (_closing) {
+      return;
     }
-    _subscriptions.clear();
-    _workers.clear();
-    await _adapter.close();
+    _closing = true;
+    _connected = false;
+    final effectiveTimeout = timeout ?? messagingConfig.shutdownTimeout;
+    Object? failure;
+    StackTrace? failureStackTrace;
+    try {
+      await Future.wait([
+        for (final subscription in _subscriptions.toList())
+          subscription.close(),
+        for (final worker in _workers.toList()) worker.close(),
+      ]).timeout(effectiveTimeout);
+      _subscriptions.clear();
+      _workers.clear();
+      await _adapter.flush(effectiveTimeout);
+    } on Object catch (error, stackTrace) {
+      failure = error;
+      failureStackTrace = stackTrace;
+    } finally {
+      try {
+        await _adapter.close();
+      } on Object catch (error, stackTrace) {
+        failure ??= error;
+        failureStackTrace ??= stackTrace;
+      }
+      _closing = false;
+    }
+    if (failure != null) {
+      Error.throwWithStackTrace(failure, failureStackTrace!);
+    }
   }
 
   @override
@@ -73,9 +115,15 @@ final class KafkaEventBus implements MessageBus, DurableJobQueue {
   Future<Subscription> subscribe<T>(
     String subject, {
     String? queueGroup,
+    int concurrency = 1,
     required MessageHandler<T> handler,
   }) async {
     _ensureConnected();
+    if (concurrency != 1) {
+      throw const MessagingUnsupportedException(
+        'Kafka subscriptions currently support concurrency 1 per consumer.',
+      );
+    }
     final consumer = await _adapter.consumerFor(
       topics: [subject],
       groupId: queueGroup ?? config.groupId,
@@ -85,6 +133,7 @@ final class KafkaEventBus implements MessageBus, DurableJobQueue {
       subject: subject,
       consumer: consumer,
       pollTimeout: _pollTimeout,
+      messagingConfig: messagingConfig,
       onClose: () => _subscriptions.remove(subscription),
       process: (record) async {
         await _handleEventRecord(record, consumer, handler);
@@ -157,6 +206,7 @@ final class KafkaEventBus implements MessageBus, DurableJobQueue {
       topic: topic,
       consumer: consumer,
       pollTimeout: _pollTimeout,
+      messagingConfig: messagingConfig,
       onClose: () => _workers.remove(worker),
       process: (record) async {
         await _handleJobRecord(
@@ -184,13 +234,17 @@ final class KafkaEventBus implements MessageBus, DurableJobQueue {
       final lastError = subscription.lastError;
       if (lastError != null) {
         return HealthCheckResult.unhealthy(
-          message: 'Kafka consumer loop failed.',
+          message: 'Kafka is connected, but a consumer loop failed.',
           details: {
             'consumerType': 'subscription',
             'subject': subscription.subject,
-            'lastConsumerError': lastError.toString(),
+            'lastConsumerError': messagingConfig.limits.truncateError(
+              lastError,
+            ),
             if (subscription.lastStackTrace != null)
-              'lastConsumerStackTrace': subscription.lastStackTrace.toString(),
+              'lastConsumerStackTrace': messagingConfig.limits.truncateError(
+                subscription.lastStackTrace!,
+              ),
           },
         );
       }
@@ -199,13 +253,17 @@ final class KafkaEventBus implements MessageBus, DurableJobQueue {
       final lastError = worker.lastError;
       if (lastError != null) {
         return HealthCheckResult.unhealthy(
-          message: 'Kafka consumer loop failed.',
+          message: 'Kafka is connected, but a consumer loop failed.',
           details: {
             'consumerType': 'worker',
             'topic': worker.topic,
-            'lastConsumerError': lastError.toString(),
+            'lastConsumerError': messagingConfig.limits.truncateError(
+              lastError,
+            ),
             if (worker.lastStackTrace != null)
-              'lastConsumerStackTrace': worker.lastStackTrace.toString(),
+              'lastConsumerStackTrace': messagingConfig.limits.truncateError(
+                worker.lastStackTrace!,
+              ),
           },
         );
       }
@@ -221,13 +279,11 @@ final class KafkaEventBus implements MessageBus, DurableJobQueue {
         },
       );
     } on Object catch (error, stackTrace) {
-      return HealthCheckResult(
-        status: HealthStatus.unhealthy,
-        checkedAt: DateTime.now(),
+      return HealthCheckResult.unhealthy(
         message: 'Kafka health check failed.',
         details: {
-          'error': error.toString(),
-          'stackTrace': stackTrace.toString(),
+          'error': messagingConfig.limits.truncateError(error),
+          'stackTrace': messagingConfig.limits.truncateError(stackTrace),
         },
       );
     }
@@ -258,7 +314,25 @@ final class KafkaEventBus implements MessageBus, DurableJobQueue {
     DeadLetterPolicy deadLetterPolicy,
     JobHandler<T> handler,
   ) async {
-    final decoded = await _decodeRecord<T>(record);
+    late final _DecodedKafkaPayload<T> decoded;
+    try {
+      decoded = await _decodeRecord<T>(record);
+    } on Object catch (error, stackTrace) {
+      if (!deadLetterPolicy.enabled) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      await _publishDeadLetter(
+        topic,
+        record,
+        MessageHeaders(),
+        deadLetterPolicy,
+        error: error,
+        stackTrace: stackTrace,
+      );
+      await consumer.commit();
+      return;
+    }
+
     final context = _KafkaJobContext(
       topic: topic,
       headers: decoded.headers,
@@ -275,6 +349,10 @@ final class KafkaEventBus implements MessageBus, DurableJobQueue {
       if (!context.completed) {
         await context.ack();
       }
+      messagingConfig.recordMetric(
+        'podbus.jobs.completed',
+        attributes: {'transport': 'kafka', 'topic': topic},
+      );
     } on Object catch (error, stackTrace) {
       if (!deadLetterPolicy.enabled) {
         Error.throwWithStackTrace(error, stackTrace);
@@ -298,15 +376,20 @@ final class KafkaEventBus implements MessageBus, DurableJobQueue {
     String? key,
   }) async {
     final encoded = await _codec.encode(payload);
-    await _adapter.produce(
-      topic: topic,
-      key: key,
-      bytes: _envelopeBytes(
-        headers: headers,
-        contentType: encoded.contentType,
-        schemaVersion: encoded.schemaVersion,
-        payload: encoded.bytes,
-      ),
+    final bytes = _envelopeBytes(
+      headers: headers,
+      contentType: encoded.contentType,
+      schemaVersion: encoded.schemaVersion,
+      messageType: encoded.messageType,
+      payload: encoded.bytes,
+    );
+    messagingConfig.limits.validatePayload(encoded.bytes);
+    messagingConfig.limits.validatePayload(bytes);
+    messagingConfig.limits.validateHeaders(headers.toMap());
+    await _adapter.produce(topic: topic, key: key, bytes: bytes);
+    messagingConfig.recordMetric(
+      'podbus.messages.published',
+      attributes: {'transport': 'kafka', 'topic': topic},
     );
   }
 
@@ -318,39 +401,66 @@ final class KafkaEventBus implements MessageBus, DurableJobQueue {
     Object? error,
     StackTrace? stackTrace,
   }) async {
+    if (!policy.enabled) {
+      return;
+    }
     final destination = policy.destination ?? '$sourceTopic.dead-letter';
-    final deadLetterHeaders = headers.copyWith(
+    final deadLetterHeaders = headers.withoutIdempotencyKey().copyWith(
       custom: {
         ...headers.custom,
-        _deadLetterSourceHeader: sourceTopic,
+        PodBusWireHeaders.deadLetterSource: sourceTopic,
+        if (!policy.includeOriginalPayload)
+          PodBusWireHeaders.deadLetterPayloadOmitted: 'true',
         if (policy.includeErrorDetails && error != null)
-          _deadLetterErrorHeader: error.toString(),
+          PodBusWireHeaders.deadLetterError: messagingConfig.limits
+              .truncateError(error),
         if (policy.includeErrorDetails && stackTrace != null)
-          _deadLetterStackTraceHeader: stackTrace.toString(),
+          PodBusWireHeaders.deadLetterStackTrace: messagingConfig.limits
+              .truncateError(stackTrace),
       },
     );
-    final decoded = _decodeEnvelope(record.bytes);
+
+    _KafkaEnvelope? original;
+    if (policy.includeOriginalPayload) {
+      try {
+        original = _decodeEnvelope(record.bytes);
+      } on Object {
+        original = null;
+      }
+    }
+    final bytes = _envelopeBytes(
+      headers: deadLetterHeaders,
+      contentType: original?.contentType ?? 'application/octet-stream',
+      schemaVersion: original?.schemaVersion ?? 1,
+      messageType: original?.messageType,
+      payload:
+          original?.payloadBytes ??
+          (policy.includeOriginalPayload ? record.bytes : const <int>[]),
+    );
+    messagingConfig.limits.validatePayload(bytes);
     await _adapter.produce(
       topic: destination,
-      key: record.key,
-      bytes: _envelopeBytes(
-        headers: deadLetterHeaders,
-        contentType: decoded.contentType,
-        schemaVersion: decoded.schemaVersion,
-        payload: decoded.payloadBytes,
-      ),
+      key: policy.includeOriginalPayload ? record.key : null,
+      bytes: bytes,
+    );
+    messagingConfig.recordMetric(
+      'podbus.jobs.dead_lettered',
+      attributes: {'transport': 'kafka', 'topic': sourceTopic},
     );
   }
 
   Future<_DecodedKafkaPayload<T>> _decodeRecord<T>(
     KafkaAdapterRecord record,
   ) async {
+    messagingConfig.limits.validatePayload(record.bytes);
     final envelope = _decodeEnvelope(record.bytes);
+    messagingConfig.limits.validateHeaders(envelope.headers.toMap());
     final payload = await _codec.decode<T>(
       EncodedMessage(
         bytes: envelope.payloadBytes,
         contentType: envelope.contentType,
         schemaVersion: envelope.schemaVersion,
+        messageType: envelope.messageType,
       ),
     );
     return _DecodedKafkaPayload(payload: payload, headers: envelope.headers);
@@ -373,6 +483,7 @@ final class KafkaEventBus implements MessageBus, DurableJobQueue {
             '${value.runtimeType}.',
           ),
         },
+        messageType: json['messageType'] as String?,
         payloadBytes: base64Decode(json['payload'] as String),
       );
     } on MessagingException {
@@ -390,6 +501,7 @@ final class KafkaEventBus implements MessageBus, DurableJobQueue {
     required MessageHeaders headers,
     required String contentType,
     required int schemaVersion,
+    String? messageType,
     required List<int> payload,
   }) {
     return utf8.encode(
@@ -397,13 +509,14 @@ final class KafkaEventBus implements MessageBus, DurableJobQueue {
         'headers': headers.toMap(),
         'contentType': contentType,
         'schemaVersion': schemaVersion,
+        'messageType': ?messageType,
         'payload': base64Encode(payload),
       }),
     );
   }
 
   void _ensureConnected() {
-    if (!_connected) {
+    if (!_connected || _closing || !_adapter.isConnected) {
       throw const MessagingConnectionException(
         'Kafka adapter is not connected.',
       );
@@ -411,7 +524,7 @@ final class KafkaEventBus implements MessageBus, DurableJobQueue {
   }
 
   void _ensureSchedulable(DateTime? runAt) {
-    if (runAt == null || !runAt.isAfter(DateTime.now())) {
+    if (runAt == null || !runAt.isAfter(messagingConfig.now())) {
       return;
     }
     throw const MessagingUnsupportedException(
@@ -441,6 +554,7 @@ final class _KafkaSubscription implements Subscription {
     required this.subject,
     required this.consumer,
     required this.pollTimeout,
+    required this.messagingConfig,
     required this.process,
     required this.onClose,
   });
@@ -448,6 +562,7 @@ final class _KafkaSubscription implements Subscription {
   final String subject;
   final KafkaAdapterConsumer consumer;
   final Duration pollTimeout;
+  final MessagingConfig messagingConfig;
   final Future<void> Function(KafkaAdapterRecord record) process;
   final void Function() onClose;
   Future<void>? _task;
@@ -470,6 +585,13 @@ final class _KafkaSubscription implements Subscription {
       } on Object catch (error, stackTrace) {
         lastError = error;
         lastStackTrace = stackTrace;
+        messagingConfig.log(
+          MessagingLogLevel.error,
+          'Kafka subscription loop failed.',
+          error: error,
+          stackTrace: stackTrace,
+          attributes: {'transport': 'kafka', 'subject': subject},
+        );
         break;
       }
     }
@@ -492,6 +614,7 @@ final class _KafkaWorker implements Worker {
     required this.topic,
     required this.consumer,
     required this.pollTimeout,
+    required this.messagingConfig,
     required this.process,
     required this.onClose,
   });
@@ -499,6 +622,7 @@ final class _KafkaWorker implements Worker {
   final String topic;
   final KafkaAdapterConsumer consumer;
   final Duration pollTimeout;
+  final MessagingConfig messagingConfig;
   final Future<void> Function(KafkaAdapterRecord record) process;
   final void Function() onClose;
   Future<void>? _task;
@@ -521,6 +645,13 @@ final class _KafkaWorker implements Worker {
       } on Object catch (error, stackTrace) {
         lastError = error;
         lastStackTrace = stackTrace;
+        messagingConfig.log(
+          MessagingLogLevel.error,
+          'Kafka worker loop failed.',
+          error: error,
+          stackTrace: stackTrace,
+          attributes: {'transport': 'kafka', 'topic': topic},
+        );
         break;
       }
     }
@@ -665,12 +796,14 @@ final class _KafkaEnvelope {
     required this.headers,
     required this.contentType,
     required this.schemaVersion,
+    required this.messageType,
     required this.payloadBytes,
   });
 
   final MessageHeaders headers;
   final String contentType;
   final int schemaVersion;
+  final String? messageType;
   final List<int> payloadBytes;
 }
 
