@@ -8,7 +8,7 @@ export function SiteFooter() {
     <footer className="site-footer">
       <div className="footer-shell">
         <div className="footer-brand">
-          <img src={withBasePath('/podbus.png')} alt="PodBus" />
+          <img src={withBasePath('/podbus-wordmark.svg')} alt="PodBus" />
           <p>Transport-aware messaging and durable jobs for Dart and Serverpod.</p>
           <span>Apache License 2.0</span>
         </div>
