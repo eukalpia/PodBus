@@ -289,7 +289,7 @@ Risky: pod-\${Platform.localHostname}`,
 
   queue.capabilities.requireAll({
     MessagingCapability.durableJobs,
-    MessagingCapability.idempotency,
+    MessagingCapability.idempotentPublish,
   });
 
   await queue.connect();
