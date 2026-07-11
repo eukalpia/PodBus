@@ -1,0 +1,5 @@
+node_modules
+.next
+out
+build-diagnostics.txt
+.DS_Store
