@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { CloseIcon, SearchIcon } from '@/components/icons';
@@ -15,9 +16,12 @@ export interface SearchEntry {
 }
 
 export function SearchDialog({ entries }: { entries: SearchEntry[] }) {
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
+  const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const resultRefs = useRef<Array<HTMLAnchorElement | null>>([]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -77,9 +81,40 @@ export function SearchDialog({ entries }: { entries: SearchEntry[] }) {
       .map((item) => item.entry);
   }, [entries, query]);
 
+  useEffect(() => {
+    setSelectedIndex(0);
+    resultRefs.current = [];
+  }, [query, open]);
+
+  useEffect(() => {
+    resultRefs.current[selectedIndex]?.scrollIntoView({ block: 'nearest' });
+  }, [selectedIndex]);
+
   function close() {
     setOpen(false);
     setQuery('');
+    setSelectedIndex(0);
+  }
+
+  function onSearchKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (results.length === 0) {
+      return;
+    }
+
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setSelectedIndex((index) => (index + 1) % results.length);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setSelectedIndex((index) => (index - 1 + results.length) % results.length);
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      const selected = results[selectedIndex];
+      if (selected) {
+        close();
+        router.push(`/docs/${selected.slug}`);
+      }
+    }
   }
 
   return (
@@ -105,18 +140,34 @@ export function SearchDialog({ entries }: { entries: SearchEntry[] }) {
                 ref={inputRef}
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={onSearchKeyDown}
                 placeholder="Search guides, APIs, transports…"
                 aria-label="Search query"
+                aria-activedescendant={
+                  results[selectedIndex] ? `search-result-${results[selectedIndex].slug}` : undefined
+                }
               />
               <button type="button" onClick={close} aria-label="Close search">
                 <CloseIcon />
               </button>
             </div>
 
-            <div className="search-results">
+            <div className="search-results" role="listbox" aria-label="Search results">
               {results.length > 0 ? (
-                results.map((entry) => (
-                  <Link key={entry.slug} href={`/docs/${entry.slug}`} onClick={close}>
+                results.map((entry, index) => (
+                  <Link
+                    key={entry.slug}
+                    id={`search-result-${entry.slug}`}
+                    ref={(element) => {
+                      resultRefs.current[index] = element;
+                    }}
+                    className={selectedIndex === index ? 'selected' : ''}
+                    role="option"
+                    aria-selected={selectedIndex === index}
+                    href={`/docs/${entry.slug}`}
+                    onMouseEnter={() => setSelectedIndex(index)}
+                    onClick={close}
+                  >
                     <span>{entry.category}</span>
                     <strong>{entry.title}</strong>
                     <p>{entry.description}</p>
@@ -132,6 +183,7 @@ export function SearchDialog({ entries }: { entries: SearchEntry[] }) {
 
             <footer className="search-footer">
               <span><kbd>↑</kbd><kbd>↓</kbd> browse</span>
+              <span><kbd>↵</kbd> open</span>
               <span><kbd>esc</kbd> close</span>
             </footer>
           </section>
