@@ -2,4 +2,5 @@ node_modules
 .next
 out
 build-diagnostics.txt
+.vercel
 .DS_Store
