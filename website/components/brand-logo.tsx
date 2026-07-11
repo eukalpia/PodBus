@@ -7,19 +7,18 @@ export function BrandLogo({
   className?: string;
   decorative?: boolean;
 }) {
-  const alt = decorative ? '' : 'PodBus';
-
   return (
     <span className={['brand-logo', className].filter(Boolean).join(' ')}>
       <img
         className="brand-logo-dark"
         src={withBasePath('/podbus-wordmark.svg')}
-        alt={alt}
+        alt={decorative ? '' : 'PodBus'}
       />
       <img
         className="brand-logo-light"
         src={withBasePath('/podbus-wordmark-light.svg')}
-        alt={alt}
+        alt=""
+        aria-hidden="true"
       />
     </span>
   );
