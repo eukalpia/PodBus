@@ -2,6 +2,8 @@ import type { MetadataRoute } from 'next';
 
 import { docs } from '@/lib/docs';
 
+export const dynamic = 'force-static';
+
 const origin = 'https://eukalpia.github.io/PodBus';
 
 export default function sitemap(): MetadataRoute.Sitemap {
