@@ -1,5 +1,6 @@
 import Link from 'next/link';
 
+import { BrandLogo } from '@/components/brand-logo';
 import { CodeBlock } from '@/components/code-block';
 import {
   ActivityIcon,
@@ -10,7 +11,7 @@ import {
   PackageIcon,
 } from '@/components/icons';
 import { docCategories } from '@/lib/docs';
-import { siteConfig, withBasePath } from '@/lib/site';
+import { siteConfig } from '@/lib/site';
 
 const workerCode = `final jobs = NatsJetStreamJobQueue(
   config: NatsMessagingConfig(
@@ -121,7 +122,7 @@ export default function HomePage() {
 
           <div className="hero-code">
             <div className="hero-code-logo">
-              <img src={withBasePath('/podbus-wordmark.svg')} alt="PodBus" />
+              <BrandLogo className="hero-brand-logo" />
               <span>JetStream · durable worker</span>
             </div>
             <CodeBlock
@@ -295,7 +296,7 @@ export default function HomePage() {
         <div className="page-shell">
           <div className="cta-panel">
             <div className="cta-glow" aria-hidden="true" />
-            <span>{siteConfig.version}</span>
+            <span>Open source · Apache 2.0</span>
             <h2>Build the message path you can explain during an incident.</h2>
             <p>
               Start with the reference NATS adapters, require the capabilities your
