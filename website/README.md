@@ -19,7 +19,7 @@ npm run typecheck
 GITHUB_ACTIONS=true npm run build
 ```
 
-The static export is written to `website/out`. Code examples should be checked against the public package APIs whenever those APIs change.
+The static export is written to `website/out`. Code examples and capability names should be checked against the public package APIs whenever those APIs change.
 
 ## Content structure
 
