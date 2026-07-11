@@ -121,7 +121,7 @@ export default function HomePage() {
 
           <div className="hero-code">
             <div className="hero-code-logo">
-              <img src={withBasePath('/podbus.png')} alt="PodBus" />
+              <img src={withBasePath('/podbus-wordmark.svg')} alt="PodBus" />
               <span>JetStream · durable worker</span>
             </div>
             <CodeBlock
