@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 
 import { CloseIcon, SearchIcon } from '@/components/icons';
 
@@ -24,7 +24,7 @@ export function SearchDialog({ entries }: { entries: SearchEntry[] }) {
   const resultRefs = useRef<Array<HTMLAnchorElement | null>>([]);
 
   useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
+    function onKeyDown(event: globalThis.KeyboardEvent) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
         setOpen((value) => !value);
@@ -96,7 +96,7 @@ export function SearchDialog({ entries }: { entries: SearchEntry[] }) {
     setSelectedIndex(0);
   }
 
-  function onSearchKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+  function onSearchKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (results.length === 0) {
       return;
     }
@@ -161,12 +161,16 @@ export function SearchDialog({ entries }: { entries: SearchEntry[] }) {
                     ref={(element) => {
                       resultRefs.current[index] = element;
                     }}
-                    className={selectedIndex === index ? 'selected' : ''}
                     role="option"
                     aria-selected={selectedIndex === index}
                     href={`/docs/${entry.slug}`}
                     onMouseEnter={() => setSelectedIndex(index)}
                     onClick={close}
+                    style={
+                      selectedIndex === index
+                        ? { background: 'var(--surface-hover)' }
+                        : undefined
+                    }
                   >
                     <span>{entry.category}</span>
                     <strong>{entry.title}</strong>
