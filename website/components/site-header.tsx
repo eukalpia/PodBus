@@ -4,10 +4,11 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
 
+import { BrandLogo } from '@/components/brand-logo';
 import { CloseIcon, GithubIcon, MenuIcon } from '@/components/icons';
 import { SearchDialog, type SearchEntry } from '@/components/search-dialog';
 import { ThemeToggle } from '@/components/theme-toggle';
-import { siteConfig, withBasePath } from '@/lib/site';
+import { siteConfig } from '@/lib/site';
 
 export function SiteHeader({ searchEntries }: { searchEntries: SearchEntry[] }) {
   const pathname = usePathname();
@@ -27,7 +28,7 @@ export function SiteHeader({ searchEntries }: { searchEntries: SearchEntry[] }) 
     <header className="site-header">
       <div className="header-shell">
         <Link className="brand" href="/" aria-label="PodBus home">
-          <img src={withBasePath('/podbus-wordmark.svg')} alt="PodBus" />
+          <BrandLogo className="header-brand-logo" />
           {inDocs ? <span className="brand-context">Docs</span> : null}
         </Link>
 
