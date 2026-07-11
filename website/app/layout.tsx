@@ -7,6 +7,7 @@ import { searchIndex } from '@/lib/docs';
 import { siteConfig } from '@/lib/site';
 
 import './globals.css';
+import './visual-refresh.css';
 
 const siteUrl = 'https://eukalpia.github.io/PodBus/';
 const logoUrl = `${siteUrl}podbus.png`;
@@ -61,8 +62,8 @@ export const viewport: Viewport = {
   initialScale: 1,
   colorScheme: 'dark light',
   themeColor: [
-    { media: '(prefers-color-scheme: dark)', color: '#090c10' },
-    { media: '(prefers-color-scheme: light)', color: '#f6f8fb' },
+    { media: '(prefers-color-scheme: dark)', color: '#05080d' },
+    { media: '(prefers-color-scheme: light)', color: '#f4f7fb' },
   ],
 };
 
