@@ -94,18 +94,14 @@ export default function HomePage() {
 
         <div className="page-shell hero-layout">
           <div className="hero-copy">
-            <div className="hero-mark">
-              <span />
-              Dart 3.12+ · {siteConfig.version}
-            </div>
             <h1>
-              Messaging for Dart,
-              <span>with the guarantees left intact.</span>
+              Messaging for Dart.
+              <span>Delivery guarantees, made explicit.</span>
             </h1>
             <p>
-              PodBus gives Dart and Serverpod services one API for events,
-              request/reply, durable work, retries, dead letters, and
-              database-backed delivery patterns. Broker differences remain explicit.
+              Events, request/reply, durable workers, retries, dead letters, and
+              database-backed delivery patterns for Dart and Serverpod—without hiding
+              the semantics of the broker underneath.
             </p>
             <div className="hero-actions">
               <Link className="primary-button" href="/docs/quick-start">
@@ -115,7 +111,7 @@ export default function HomePage() {
                 View source <ArrowUpRightIcon />
               </a>
             </div>
-            <div className="hero-proof">
+            <div className="hero-proof" aria-label="Supported infrastructure">
               <span>NATS</span><i />
               <span>RabbitMQ</span><i />
               <span>Kafka</span><i />
@@ -125,8 +121,8 @@ export default function HomePage() {
 
           <div className="hero-code">
             <div className="hero-code-logo">
-              <img src={withBasePath('/podbus.png')} alt="" />
-              <span>durable worker</span>
+              <img src={withBasePath('/podbus.png')} alt="PodBus" />
+              <span>JetStream · durable worker</span>
             </div>
             <CodeBlock
               code={workerCode}
