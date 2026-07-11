@@ -1,4 +1,0 @@
-User-agent: *
-Allow: /
-
-Sitemap: https://eukalpia.github.io/PodBus/sitemap.xml
