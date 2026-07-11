@@ -12,6 +12,7 @@ import { siteConfig, withBasePath } from '@/lib/site';
 export function SiteHeader({ searchEntries }: { searchEntries: SearchEntry[] }) {
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
+  const inDocs = pathname.startsWith('/docs');
 
   useEffect(() => {
     setMenuOpen(false);
@@ -27,14 +28,14 @@ export function SiteHeader({ searchEntries }: { searchEntries: SearchEntry[] }) 
       <div className="header-shell">
         <Link className="brand" href="/" aria-label="PodBus home">
           <img src={withBasePath('/podbus.png')} alt="PodBus" />
-          <span className="version-badge">{siteConfig.version}</span>
+          {inDocs ? <span className="brand-context">Docs</span> : null}
         </Link>
 
         <nav className="primary-nav" aria-label="Primary navigation">
           <Link className={pathname === '/' ? 'active' : ''} href="/">
             Overview
           </Link>
-          <Link className={pathname.startsWith('/docs') ? 'active' : ''} href="/docs">
+          <Link className={inDocs ? 'active' : ''} href="/docs">
             Documentation
           </Link>
           <a href={`${siteConfig.repository}/tree/main/examples`}>Examples</a>
