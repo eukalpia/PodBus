@@ -8,6 +8,7 @@ import { siteConfig } from '@/lib/site';
 
 import './globals.css';
 import './visual-refresh.css';
+import './brand-polish.css';
 
 const siteUrl = 'https://eukalpia.github.io/PodBus/';
 const logoUrl = `${siteUrl}podbus.png`;
