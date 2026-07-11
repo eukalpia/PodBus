@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "site/**"
+      - "website/**"
       - "assets/podbus.png"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
@@ -16,11 +16,14 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
+env:
+  NEXT_TELEMETRY_DISABLED: "1"
+
 jobs:
   build:
-    name: Build static site
+    name: Build Next.js documentation
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: read
       pages: write
@@ -30,27 +33,53 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Prepare public assets
+        run: |
+          mkdir -p website/public
+          cp assets/podbus.png website/public/podbus.png
+
+      - name: Install dependencies
+        working-directory: website
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci --no-audit --no-fund
+          else
+            npm install --no-audit --no-fund
+          fi
+
+      - name: Type-check
+        working-directory: website
+        run: npm run typecheck
+
+      - name: Build static export
+        working-directory: website
+        run: npm run build
+
+      - name: Validate export
+        run: |
+          test -s website/out/index.html
+          test -s website/out/docs/index.html
+          test -s website/out/docs/introduction/index.html
+          test -s website/out/docs/delivery-semantics/index.html
+          test -s website/out/docs/rabbitmq/index.html
+          test -s website/out/docs/api-reference/index.html
+          test -s website/out/podbus.png
+          touch website/out/.nojekyll
+
       - name: Configure Pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
-
-      - name: Assemble site
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p _site/assets
-          cp -R site/. _site/
-          cp assets/podbus.png _site/assets/podbus.png
-          cp _site/index.html _site/404.html
-          touch _site/.nojekyll
-          test -s _site/index.html
-          test -s _site/styles.css
-          test -s _site/app.js
-          test -s _site/assets/podbus.png
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
-          path: _site
+          path: website/out
 
   deploy:
     name: Deploy to GitHub Pages
