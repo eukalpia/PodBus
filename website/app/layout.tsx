@@ -11,6 +11,7 @@ import './visual-refresh.css';
 
 const siteUrl = 'https://eukalpia.github.io/PodBus/';
 const logoUrl = `${siteUrl}podbus.png`;
+const iconUrl = `${siteUrl}podbus-icon.svg`;
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
@@ -51,9 +52,9 @@ export const metadata: Metadata = {
     images: [logoUrl],
   },
   icons: {
-    icon: logoUrl,
-    shortcut: logoUrl,
-    apple: logoUrl,
+    icon: iconUrl,
+    shortcut: iconUrl,
+    apple: iconUrl,
   },
 };
 
