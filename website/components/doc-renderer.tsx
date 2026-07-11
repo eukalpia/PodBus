@@ -11,6 +11,8 @@ import {
 import { InlineText } from '@/components/inline-text';
 import type { DocBlock, DocPage, NoteTone } from '@/lib/docs-types';
 
+export { TableOfContents } from '@/components/table-of-contents';
+
 function NoteIcon({ tone }: { tone: NoteTone }) {
   if (tone === 'success') {
     return <CheckIcon />;
@@ -113,7 +115,7 @@ export function DocRenderer({
   previous?: DocPage;
   next?: DocPage;
 }) {
-  const sourceUrl = `https://github.com/eukalpia/PodBus/tree/main/website/content`;
+  const sourceUrl = 'https://github.com/eukalpia/PodBus/tree/main/website/content';
 
   return (
     <>
@@ -172,23 +174,5 @@ export function DocRenderer({
         ) : <span />}
       </nav>
     </>
-  );
-}
-
-export function TableOfContents({ page }: { page: DocPage }) {
-  return (
-    <aside className="doc-toc" aria-label="On this page">
-      <strong>On this page</strong>
-      <nav>
-        {page.sections.map((section) => (
-          <a key={section.id} href={`#${section.id}`}>{section.title}</a>
-        ))}
-      </nav>
-      <div className="toc-divider" />
-      <a className="toc-github" href="https://github.com/eukalpia/PodBus/issues/new">
-        Report a documentation issue
-        <ArrowUpRightIcon />
-      </a>
-    </aside>
   );
 }
