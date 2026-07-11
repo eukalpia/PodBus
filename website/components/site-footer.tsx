@@ -1,14 +1,15 @@
 import Link from 'next/link';
 
+import { BrandLogo } from '@/components/brand-logo';
 import { GithubIcon } from '@/components/icons';
-import { siteConfig, withBasePath } from '@/lib/site';
+import { siteConfig } from '@/lib/site';
 
 export function SiteFooter() {
   return (
     <footer className="site-footer">
       <div className="footer-shell">
         <div className="footer-brand">
-          <img src={withBasePath('/podbus-wordmark.svg')} alt="PodBus" />
+          <BrandLogo className="footer-brand-logo" />
           <p>Transport-aware messaging and durable jobs for Dart and Serverpod.</p>
           <span>Apache License 2.0</span>
         </div>
