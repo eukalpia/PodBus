@@ -27,7 +27,7 @@ export function SiteHeader({ searchEntries }: { searchEntries: SearchEntry[] }) 
     <header className="site-header">
       <div className="header-shell">
         <Link className="brand" href="/" aria-label="PodBus home">
-          <img src={withBasePath('/podbus.png')} alt="PodBus" />
+          <img src={withBasePath('/podbus-wordmark.svg')} alt="PodBus" />
           {inDocs ? <span className="brand-context">Docs</span> : null}
         </Link>
 
