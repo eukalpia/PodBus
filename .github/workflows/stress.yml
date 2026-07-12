@@ -17,8 +17,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: large-stress-${{ github.ref }}
-  cancel-in-progress: false
+  group: podbus-large-transport-qualification
+  cancel-in-progress: true
 
 env:
   DART_SDK: 3.12.0
