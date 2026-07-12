@@ -1,8 +1,8 @@
 name: Export branch tree
 
 on:
-  push:
-    branches: [beta-resilience-production-suite]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
