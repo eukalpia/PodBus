@@ -1,0 +1,74 @@
+name: Export broker fault patch
+
+on:
+  push:
+    branches: [beta-resilience-nats-rabbitmq]
+    paths:
+      - ".github/workflows/export-fault-patch.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: beta-resilience-nats-rabbitmq
+          fetch-depth: 0
+
+      - name: Reconstruct patch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import urllib.request
+
+          repository = os.environ['GITHUB_REPOSITORY']
+          token = os.environ['GH_TOKEN']
+          chunks = [
+              'ca67c7ebdbcbb4a9a6e9cd0c8743216f3429cb6c',
+              '82a095dd0327ed232aca8dd0e8581db1f6d9ffa1',
+              '46d9490a191805e1db6adf09abc46e68c9a9790e',
+              '1f5043a7311f1c724c8f7a8e9777954dbcc38e4c',
+              '08a338d70e95262a04e394ec781d2900ae64f652',
+              '8640d0fbb8c3ae82ede95d67779032ae9399f581',
+              '08c65555b3ce41850ae06910c1e2ab1f843e2aa3',
+              'fbef42873ae56426391fd1574075cc37dafe8998',
+          ]
+          with open('/tmp/fault-production.patch.gz', 'wb') as output:
+              for sha in chunks:
+                  request = urllib.request.Request(
+                      f'https://api.github.com/repos/{repository}/git/blobs/{sha}',
+                      headers={
+                          'Authorization': f'Bearer {token}',
+                          'Accept': 'application/vnd.github+json',
+                          'X-GitHub-Api-Version': '2022-11-28',
+                      },
+                  )
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      payload = json.load(response)
+                  output.write(base64.b64decode(payload['content']))
+          PY
+          gzip --test /tmp/fault-production.patch.gz
+          gzip --decompress --stdout /tmp/fault-production.patch.gz > /tmp/fault-production.patch
+          mkdir -p exported-patch
+          cp /tmp/fault-production.patch.gz exported-patch/
+          cp /tmp/fault-production.patch exported-patch/
+          git apply --check /tmp/fault-production.patch > exported-patch/apply-check.txt 2>&1 || true
+          wc -c exported-patch/* > exported-patch/sizes.txt
+
+      - name: Upload reconstructed patch
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: broker-fault-production-patch
+          path: exported-patch
+          retention-days: 7
