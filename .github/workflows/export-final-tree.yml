@@ -1,0 +1,28 @@
+name: Export final branch tree
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - name: Write metadata
+        run: |
+          mkdir -p final-tree
+          echo "COMMIT_SHA=$(git rev-parse HEAD)" > final-tree/tree.txt
+          echo "TREE_SHA=$(git rev-parse HEAD^{tree})" >> final-tree/tree.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: final-tree-metadata
+          path: final-tree/tree.txt
+          retention-days: 1
