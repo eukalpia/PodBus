@@ -1,11 +1,10 @@
 name: Apply stress harness fix
 
 on:
-  push:
-    branches:
-      - beta-resilience-production-suite
+  pull_request:
     paths:
       - ".github/workflows/apply-stress-harness-fix.yml"
+      - "tool/ci/apply_stress_harness_fix.py"
   workflow_dispatch:
 
 permissions:
@@ -17,6 +16,7 @@ concurrency:
 
 jobs:
   patch-and-commit:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
