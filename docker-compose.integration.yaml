@@ -14,9 +14,8 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
-      RABBITMQ_ERLANG_COOKIE: podbus-integration-cookie
     volumes:
-      - rabbitmq-data:/var/lib/rabbitmq
+      - rabbitmq-data:/var/lib/rabbitmq/mnesia
     ports:
       - "5672:5672"
       - "15672:15672"
