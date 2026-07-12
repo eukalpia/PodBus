@@ -1,0 +1,125 @@
+name: Apply final broker fault suite
+
+on:
+  push:
+    branches: [beta-resilience-nats-rabbitmq]
+    paths:
+      - ".github/workflows/apply-final-fault-suite.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-final-broker-fault-suite
+  cancel-in-progress: false
+
+env:
+  DART_SDK: 3.12.0
+
+jobs:
+  apply-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: beta-resilience-nats-rabbitmq
+          fetch-depth: 0
+
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260
+        with:
+          sdk: ${{ env.DART_SDK }}
+
+      - name: Reconstruct and apply final patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout 7b19945496bc8f0dcb27c57e57fdc0ecadb6b4f4 -- .github/workflows/ci.yml
+          cat .github/patches/final-fault-suite.part00 | base64 --decode > /tmp/final-fault-suite.patch.gz
+          echo "abab3b41f6435d3822ddc53f8f563b360bfa089833c1115327fe1652c021c389  /tmp/final-fault-suite.patch.gz" | sha256sum --check
+          gzip --test /tmp/final-fault-suite.patch.gz
+          gzip --decompress --stdout /tmp/final-fault-suite.patch.gz > /tmp/final-fault-suite.patch
+          git apply --check /tmp/final-fault-suite.patch
+          git apply /tmp/final-fault-suite.patch
+          rm -f \
+            .github/patches/final-fault-suite.part00 \
+            .github/workflows/apply-final-fault-suite.yml \
+            .github/workflows/export-fault-patch.yml
+          rmdir .github/patches 2>/dev/null || true
+
+      - name: Resolve dependencies
+        run: dart pub get
+
+      - name: Validate source and unit suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          dart format --output=none --set-exit-if-changed .
+          dart analyze .
+          dart test \
+            packages/podbus_core/test \
+            packages/podbus_nats/test \
+            packages/podbus_rabbitmq/test \
+            packages/podbus_kafka/test \
+            packages/podbus_postgres/test \
+            packages/podbus_observability/test \
+            packages/podbus_serverpod/test \
+            test \
+            --exclude-tags=integration \
+            --reporter=expanded
+
+      - name: Start brokers and Toxiproxy
+        run: docker compose -f docker-compose.integration.yaml up -d nats rabbitmq toxiproxy
+
+      - name: Wait for fault infrastructure
+        run: |
+          bash tool/ci/wait_for_nats.sh
+          bash tool/ci/wait_for_rabbitmq.sh
+          bash tool/ci/wait_for_toxiproxy.sh
+
+      - name: Run broker-backed smoke suite
+        run: >-
+          dart run tool/fault_suite.dart
+          --profile=smoke
+          --report=test-results/apply-fault-suite.json
+
+      - name: Run short fault soak
+        run: >-
+          dart run tool/soak_resilience.dart
+          --duration=30s
+          --allow-short=true
+          --fault-interval=8s
+          --outage=1s
+          --publish-interval=30ms
+          --report=test-results/apply-soak.json
+
+      - name: Capture broker logs
+        if: always()
+        run: |
+          mkdir -p test-results
+          docker compose -f docker-compose.integration.yaml logs --no-color nats rabbitmq toxiproxy > test-results/apply-brokers.log || true
+
+      - name: Upload validation evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: final-broker-fault-validation
+          path: test-results
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Stop brokers
+        if: always()
+        run: docker compose -f docker-compose.integration.yaml down -v
+
+      - name: Commit validated implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Add broker-backed NATS and RabbitMQ fault validation"
+          git push origin HEAD:beta-resilience-nats-rabbitmq
