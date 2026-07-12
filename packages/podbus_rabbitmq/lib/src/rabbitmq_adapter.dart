@@ -75,64 +75,21 @@ final class DartRabbitMqAdapter implements RabbitMqAdapter {
   StreamSubscription<amqp.PublishNotification>? _publishNotifications;
   StreamSubscription<amqp.BasicReturnMessage>? _returnedMessages;
   StreamSubscription<Exception>? _clientErrors;
+
   final Map<String, amqp.Exchange> _publisherExchanges = {};
   final Map<String, amqp.Exchange> _consumerExchanges = {};
   final Map<String, amqp.Queue> _queues = {};
   final Map<String, Completer<void>> _pendingPublishes = {};
+
   var _publisherConfirmTimeout = const Duration(seconds: 5);
   var _mandatoryPublish = true;
   var _publishSequence = 0;
+  var _publishEpoch = 0;
   var _connected = false;
+  Future<void> _publishTail = Future<void>.value();
 
   @override
   bool get isConnected => _connected;
-
-  @override
-  Future<void> bindQueue({
-    required String queue,
-    required String exchange,
-    required String routingKey,
-  }) {
-    return _channelOperation('queue binding', () async {
-      final queueRef =
-          _queues[queue] ?? await _consumerCh.queue(queue, declare: false);
-      final exchangeRef =
-          _consumerExchanges[exchange] ??
-          await _consumerCh.exchange(
-            exchange,
-            amqp.ExchangeType.TOPIC,
-            declare: false,
-          );
-      await queueRef.bind(exchangeRef, routingKey);
-      _queues[queue] = queueRef;
-      _consumerExchanges[exchange] = exchangeRef;
-    });
-  }
-
-  @override
-  Future<void> close() async {
-    _connected = false;
-    _failPendingPublishes(
-      const MessagingConnectionException(
-        'RabbitMQ adapter closed before publisher confirmation.',
-      ),
-    );
-    await _publishNotifications?.cancel();
-    await _returnedMessages?.cancel();
-    await _clientErrors?.cancel();
-    _publishNotifications = null;
-    _returnedMessages = null;
-    _clientErrors = null;
-    await _publisherChannel?.close();
-    await _consumerChannel?.close();
-    await _client?.close();
-    _publisherChannel = null;
-    _consumerChannel = null;
-    _client = null;
-    _publisherExchanges.clear();
-    _consumerExchanges.clear();
-    _queues.clear();
-  }
 
   @override
   Future<void> connect(RabbitMqMessagingConfig config) async {
@@ -154,9 +111,11 @@ final class DartRabbitMqAdapter implements RabbitMqAdapter {
           : null,
       onBadCertificate: config.onBadCertificate,
     );
+
     final client = _client ?? amqp.Client(settings: settings);
     await client.connect();
     _client = client;
+
     await _clientErrors?.cancel();
     _clientErrors = client.errorListener(
       _handleClientError,
@@ -179,12 +138,16 @@ final class DartRabbitMqAdapter implements RabbitMqAdapter {
         }
       },
     );
-    _publisherChannel = await client.channel();
-    _consumerChannel = await client.channel();
+
+    final publisherChannel = await client.channel();
+    final consumerChannel = await client.channel();
+    _publisherChannel = publisherChannel;
+    _consumerChannel = consumerChannel;
     _publisherConfirmTimeout = config.publisherConfirmTimeout;
     _mandatoryPublish = config.mandatoryPublish;
-    await _publisherChannel!.confirmPublishedMessages();
-    _publishNotifications = _publisherChannel!.publishNotifier(
+
+    await publisherChannel.confirmPublishedMessages();
+    _publishNotifications = publisherChannel.publishNotifier(
       _handlePublishNotification,
       onError: (Object error, StackTrace stackTrace) {
         _failPendingPublishes(
@@ -196,7 +159,7 @@ final class DartRabbitMqAdapter implements RabbitMqAdapter {
         );
       },
     );
-    _returnedMessages = _publisherChannel!.basicReturnListener(
+    _returnedMessages = publisherChannel.basicReturnListener(
       _handleReturnedMessage,
       onError: (Object error, StackTrace stackTrace) {
         _failPendingPublishes(
@@ -208,21 +171,39 @@ final class DartRabbitMqAdapter implements RabbitMqAdapter {
         );
       },
     );
+
+    _publishEpoch += 1;
+    _publishTail = Future<void>.value();
     _connected = true;
   }
 
   @override
-  Future<RabbitMqConsumer> consume({
-    required String queue,
-    required bool noAck,
-  }) {
-    return _channelOperation('consumer creation', () async {
-      final queueRef =
-          _queues[queue] ?? await _consumerCh.queue(queue, declare: false);
-      _queues[queue] = queueRef;
-      final consumer = await queueRef.consume(noAck: noAck);
-      return _DartRabbitMqConsumer(consumer);
-    });
+  Future<void> close() async {
+    _connected = false;
+    _publishEpoch += 1;
+    _publishTail = Future<void>.value();
+    _failPendingPublishes(
+      const MessagingConnectionException(
+        'RabbitMQ adapter closed before publisher confirmation.',
+      ),
+    );
+
+    await _publishNotifications?.cancel();
+    await _returnedMessages?.cancel();
+    await _clientErrors?.cancel();
+    _publishNotifications = null;
+    _returnedMessages = null;
+    _clientErrors = null;
+
+    await _publisherChannel?.close();
+    await _consumerChannel?.close();
+    await _client?.close();
+    _publisherChannel = null;
+    _consumerChannel = null;
+    _client = null;
+    _publisherExchanges.clear();
+    _consumerExchanges.clear();
+    _queues.clear();
   }
 
   @override
@@ -256,7 +237,6 @@ final class DartRabbitMqAdapter implements RabbitMqAdapter {
           queueArguments[key] = value;
         }
       }
-
       _queues[name] = await _consumerCh.queue(
         name,
         durable: durable,
@@ -268,7 +248,86 @@ final class DartRabbitMqAdapter implements RabbitMqAdapter {
   }
 
   @override
+  Future<void> bindQueue({
+    required String queue,
+    required String exchange,
+    required String routingKey,
+  }) {
+    return _channelOperation('queue binding', () async {
+      final queueRef =
+          _queues[queue] ?? await _consumerCh.queue(queue, declare: false);
+      final exchangeRef =
+          _consumerExchanges[exchange] ??
+          await _consumerCh.exchange(
+            exchange,
+            amqp.ExchangeType.TOPIC,
+            declare: false,
+          );
+      await queueRef.bind(exchangeRef, routingKey);
+      _queues[queue] = queueRef;
+      _consumerExchanges[exchange] = exchangeRef;
+    });
+  }
+
+  @override
+  Future<RabbitMqConsumer> consume({
+    required String queue,
+    required bool noAck,
+  }) {
+    return _channelOperation('consumer creation', () async {
+      final queueRef =
+          _queues[queue] ?? await _consumerCh.queue(queue, declare: false);
+      _queues[queue] = queueRef;
+      final consumer = await queueRef.consume(noAck: noAck);
+      return _DartRabbitMqConsumer(consumer);
+    });
+  }
+
+  @override
+  Future<void> setPrefetchCount(int count) {
+    return _channelOperation(
+      'QoS configuration',
+      () => _consumerCh.qos(null, count, global: false),
+    );
+  }
+
+  @override
   Future<void> publish({
+    required String exchange,
+    required String routingKey,
+    required List<int> bytes,
+    required Map<String, String> headers,
+    required bool persistent,
+  }) {
+    final epoch = _publishEpoch;
+
+    // dart_amqp 0.3.1 mutates its live pending-confirm key iterable when
+    // RabbitMQ emits a multi-ack. Keeping one outstanding confirm per channel
+    // avoids that unsafe branch while preserving the broker-confirm contract.
+    final operation = _publishTail.then<void>((_) async {
+      if (!_connected || epoch != _publishEpoch) {
+        throw const MessagingConnectionException(
+          'RabbitMQ publisher connection changed before publish started.',
+        );
+      }
+      await _publishConfirmed(
+        exchange: exchange,
+        routingKey: routingKey,
+        bytes: bytes,
+        headers: headers,
+        persistent: persistent,
+      );
+    });
+
+    // A failed publish must not poison the serialization lane for later calls.
+    _publishTail = operation.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace __) {},
+    );
+    return operation;
+  }
+
+  Future<void> _publishConfirmed({
     required String exchange,
     required String routingKey,
     required List<int> bytes,
@@ -290,6 +349,7 @@ final class DartRabbitMqAdapter implements RabbitMqAdapter {
       ..corellationId = publishId
       ..persistent = persistent
       ..contentType = headers['podbus-content-type'];
+
     try {
       exchangeRef.publish(
         Uint8List.fromList(bytes),
@@ -319,14 +379,6 @@ final class DartRabbitMqAdapter implements RabbitMqAdapter {
       _handleClientError(failure);
       throw failure;
     }
-  }
-
-  @override
-  Future<void> setPrefetchCount(int count) {
-    return _channelOperation(
-      'QoS configuration',
-      () => _consumerCh.qos(null, count, global: false),
-    );
   }
 
   amqp.Channel get _publisherCh {
@@ -366,6 +418,7 @@ final class DartRabbitMqAdapter implements RabbitMqAdapter {
 
   void _handleClientError(Exception error) {
     _connected = false;
+    _publishEpoch += 1;
     _failPendingPublishes(
       MessagingConnectionException(
         'RabbitMQ client or channel failed.',
