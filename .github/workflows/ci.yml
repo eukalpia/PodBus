@@ -26,11 +26,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          set -euo pipefail
-          python3 - <<'PY'
+          set -uo pipefail
+          mkdir -p exported-patch
+          python3 - <<'PY' > exported-patch/reconstruction.log 2>&1
           import base64
           import json
           import os
+          import traceback
           import urllib.request
 
           repository = os.environ['GITHUB_REPOSITORY']
@@ -45,35 +47,46 @@ jobs:
               '08c65555b3ce41850ae06910c1e2ab1f843e2aa3',
               'fbef42873ae56426391fd1574075cc37dafe8998',
           ]
-          with open('/tmp/podbus-fault.patch.gz', 'wb') as output:
-              for sha in chunks:
-                  request = urllib.request.Request(
-                      f'https://api.github.com/repos/{repository}/git/blobs/{sha}',
-                      headers={
-                          'Authorization': f'Bearer {token}',
-                          'Accept': 'application/vnd.github+json',
-                          'X-GitHub-Api-Version': '2022-11-28',
-                      },
-                  )
-                  with urllib.request.urlopen(request, timeout=30) as response:
-                      payload = json.load(response)
-                  output.write(base64.b64decode(payload['content']))
+          try:
+              with open('/tmp/podbus-fault.patch.gz', 'wb') as output:
+                  for index, sha in enumerate(chunks):
+                      print(f'fetching {index}: {sha}', flush=True)
+                      request = urllib.request.Request(
+                          f'https://api.github.com/repos/{repository}/git/blobs/{sha}',
+                          headers={
+                              'Authorization': f'Bearer {token}',
+                              'Accept': 'application/vnd.github+json',
+                              'X-GitHub-Api-Version': '2022-11-28',
+                          },
+                      )
+                      with urllib.request.urlopen(request, timeout=30) as response:
+                          payload = json.load(response)
+                      chunk = base64.b64decode(payload['content'])
+                      print(f'chunk bytes: {len(chunk)}', flush=True)
+                      output.write(chunk)
+              print('reconstruction complete', flush=True)
+          except Exception:
+              traceback.print_exc()
           PY
-          gzip --test /tmp/podbus-fault.patch.gz
-          gzip --decompress --stdout /tmp/podbus-fault.patch.gz > /tmp/podbus-fault.patch
-          mkdir -p exported-patch
-          cp /tmp/podbus-fault.patch.gz exported-patch/
-          cp /tmp/podbus-fault.patch exported-patch/
-          if git apply --check /tmp/podbus-fault.patch > exported-patch/apply-check.txt 2>&1; then
-            echo compatible > exported-patch/apply-status.txt
-          else
-            echo needs-rebase > exported-patch/apply-status.txt
-          fi
-          wc -c exported-patch/* > exported-patch/sizes.txt
 
-      - name: Upload patch
+          if gzip --test /tmp/podbus-fault.patch.gz > exported-patch/gzip-test.txt 2>&1; then
+            gzip --decompress --stdout /tmp/podbus-fault.patch.gz > exported-patch/podbus-fault.patch
+            cp /tmp/podbus-fault.patch.gz exported-patch/
+            if git apply --check exported-patch/podbus-fault.patch > exported-patch/apply-check.txt 2>&1; then
+              echo compatible > exported-patch/apply-status.txt
+            else
+              echo needs-rebase > exported-patch/apply-status.txt
+            fi
+          else
+            echo reconstruction-failed > exported-patch/apply-status.txt
+          fi
+          find exported-patch -maxdepth 1 -type f -printf '%f %s bytes\n' | sort > exported-patch/sizes.txt
+
+      - name: Upload patch diagnostics
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: broker-fault-production-patch
           path: exported-patch
+          if-no-files-found: error
           retention-days: 7
