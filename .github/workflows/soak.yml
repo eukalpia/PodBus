@@ -1,0 +1,89 @@
+name: Resilience soak
+
+on:
+  schedule:
+    - cron: "17 2 * * 0"
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: Duration accepted by tool/soak_resilience.dart (1h to 24h)
+        required: true
+        default: 1h
+        type: string
+      allow_short:
+        description: Permit a sub-hour smoke run
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: resilience-soak
+  cancel-in-progress: false
+
+env:
+  DART_SDK: 3.12.0
+  SOAK_DURATION: ${{ github.event_name == 'workflow_dispatch' && inputs.duration || '1h' }}
+  ALLOW_SHORT: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_short || false }}
+
+jobs:
+  soak:
+    name: NATS and RabbitMQ soak
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260
+        with:
+          sdk: ${{ env.DART_SDK }}
+      - name: Reject unsupported hosted duration
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os, re
+          value = os.environ['SOAK_DURATION']
+          match = re.fullmatch(r'(\d+)(ms|s|m|h)', value)
+          if not match:
+              raise SystemExit(f'invalid duration: {value}')
+          amount, unit = int(match.group(1)), match.group(2)
+          seconds = amount * {'ms': .001, 's': 1, 'm': 60, 'h': 3600}[unit]
+          if seconds > 5 * 3600:
+              raise SystemExit(
+                  'GitHub-hosted jobs are capped at six hours. Run durations '
+                  'above 5h on a dedicated host with: '
+                  'dart run tool/soak_resilience.dart --duration=<1h..24h>'
+              )
+          PY
+      - name: Resolve dependencies
+        run: dart pub get
+      - name: Start brokers and Toxiproxy
+        run: docker compose -f docker-compose.integration.yaml up -d nats rabbitmq toxiproxy
+      - name: Wait for services
+        run: |
+          bash tool/ci/wait_for_nats.sh
+          bash tool/ci/wait_for_rabbitmq.sh
+          bash tool/ci/wait_for_toxiproxy.sh
+      - name: Run resilience soak
+        run: >-
+          dart run tool/soak_resilience.dart
+          --duration=${SOAK_DURATION}
+          --allow-short=${ALLOW_SHORT}
+          --report=test-results/soak-summary.json
+      - name: Capture broker logs
+        if: always()
+        run: >-
+          docker compose -f docker-compose.integration.yaml logs --no-color
+          nats rabbitmq toxiproxy > test-results/soak-brokers.log
+      - name: Upload soak evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: resilience-soak-${{ env.SOAK_DURATION }}
+          path: test-results
+          if-no-files-found: warn
+          retention-days: 90
+      - name: Stop services
+        if: always()
+        run: docker compose -f docker-compose.integration.yaml down -v

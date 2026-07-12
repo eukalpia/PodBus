@@ -1,0 +1,75 @@
+name: Broker fault injection
+
+on:
+  pull_request:
+    paths:
+      - "packages/podbus_core/**"
+      - "packages/podbus_nats/**"
+      - "packages/podbus_rabbitmq/**"
+      - "tool/fault_worker.dart"
+      - "tool/fault_suite.dart"
+      - "tool/src/fault_harness.dart"
+      - "docker-compose.integration.yaml"
+      - ".github/workflows/fault-injection.yml"
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Fault-suite profile
+        required: true
+        default: smoke
+        type: choice
+        options:
+          - smoke
+          - full
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fault-injection-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DART_SDK: 3.12.0
+  PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profile || 'smoke' }}
+
+jobs:
+  broker-faults:
+    name: NATS and RabbitMQ broker faults
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260
+        with:
+          sdk: ${{ env.DART_SDK }}
+      - name: Resolve dependencies
+        run: dart pub get
+      - name: Start brokers and Toxiproxy
+        run: docker compose -f docker-compose.integration.yaml up -d nats rabbitmq toxiproxy
+      - name: Wait for services
+        run: |
+          bash tool/ci/wait_for_nats.sh
+          bash tool/ci/wait_for_rabbitmq.sh
+          bash tool/ci/wait_for_toxiproxy.sh
+      - name: Run broker-backed fault suite
+        run: >-
+          dart run tool/fault_suite.dart
+          --profile=${PROFILE}
+          --report=test-results/fault-suite.json
+      - name: Capture broker logs
+        if: always()
+        run: >-
+          docker compose -f docker-compose.integration.yaml logs --no-color
+          nats rabbitmq toxiproxy > test-results/fault-brokers.log
+      - name: Upload fault diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: broker-fault-diagnostics-${{ env.PROFILE }}
+          path: test-results
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Stop services
+        if: always()
+        run: docker compose -f docker-compose.integration.yaml down -v

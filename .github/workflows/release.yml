@@ -14,7 +14,7 @@ jobs:
   release:
     name: Verify and publish release artifacts
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     environment: release
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -39,6 +39,35 @@ jobs:
             packages/podbus_observability/test \
             packages/podbus_serverpod/test \
             --exclude-tags=integration
+      - name: Start production-gate brokers
+        run: docker compose -f docker-compose.integration.yaml up -d nats rabbitmq toxiproxy
+      - name: Wait for production-gate brokers
+        run: |
+          bash tool/ci/wait_for_nats.sh
+          bash tool/ci/wait_for_rabbitmq.sh
+          bash tool/ci/wait_for_toxiproxy.sh
+      - name: Run full broker fault gate
+        run: >-
+          dart run tool/fault_suite.dart
+          --profile=full
+          --report=test-results/release-fault-suite.json
+      - name: Capture production-gate diagnostics
+        if: always()
+        run: |
+          mkdir -p test-results
+          docker compose -f docker-compose.integration.yaml logs --no-color \
+            nats rabbitmq toxiproxy > test-results/release-fault-brokers.log || true
+      - name: Upload production-gate diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-broker-fault-diagnostics
+          path: test-results
+          if-no-files-found: warn
+          retention-days: 90
+      - name: Stop production-gate brokers
+        if: always()
+        run: docker compose -f docker-compose.integration.yaml down -v
       - name: Verify tag matches package version
         shell: bash
         run: |
