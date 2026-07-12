@@ -1,10 +1,25 @@
 from pathlib import Path
 import re
 
-path = Path('tool/stress_transports.dart')
-source = path.read_text()
+stress_path = Path('tool/stress_transports.dart')
+source = stress_path.read_text()
 
-nats = r'''Future<StressResult> _stressNatsCoreEvents(
+
+def replace_function(start_name: str, next_name: str, replacement: str) -> None:
+    global source
+    pattern = (
+        rf'Future<StressResult> {re.escape(start_name)}\('
+        rf'[\s\S]*?(?=Future<StressResult> {re.escape(next_name)}\()'
+    )
+    source, count = re.subn(pattern, replacement, source, count=1)
+    if count != 1:
+        raise SystemExit(f'failed to replace {start_name}')
+
+
+replace_function(
+    '_stressNatsCoreEvents',
+    '_stressRabbitMqEvents',
+    r'''Future<StressResult> _stressNatsCoreEvents(
   StressOptions options,
   StressScenario scenario,
 ) async {
@@ -62,23 +77,20 @@ nats = r'''Future<StressResult> _stressNatsCoreEvents(
   }
 }
 
-'''
-source, count = re.subn(
-    r'Future<StressResult> _stressNatsCoreEvents\([\s\S]*?(?=Future<StressResult> _stressRabbitMqEvents)',
-    nats,
-    source,
-    count=1,
+''',
 )
-if count != 1:
-    raise SystemExit('failed to replace NATS Core stress function')
 
-rabbit = r'''Future<StressResult> _stressRabbitMqEvents(
+replace_function(
+    '_stressRabbitMqEvents',
+    '_stressKafkaEvents',
+    r'''Future<StressResult> _stressRabbitMqEvents(
   StressOptions options,
   StressScenario scenario, {
   required bool durable,
 }) async {
   final id = _runId();
   final subject = 'podbus.stress.rabbitmq.$id';
+
   RabbitMqMessagingConfig config(String connectionName) {
     return RabbitMqMessagingConfig(
       uri: Uri.parse(
@@ -145,51 +157,38 @@ rabbit = r'''Future<StressResult> _stressRabbitMqEvents(
   }
 }
 
-'''
-source, count = re.subn(
-    r'Future<StressResult> _stressRabbitMqEvents\([\s\S]*?(?=Future<StressResult> _stressKafkaEvents)',
-    rabbit,
-    source,
-    count=1,
+''',
 )
-if count != 1:
-    raise SystemExit('failed to replace RabbitMQ event stress function')
 
-old_js = '''    await queue.connect();
+replace_function(
+    '_stressNatsJetStreamJobs',
+    '_stressRabbitMqJobs',
+    r'''Future<StressResult> _stressNatsJetStreamJobs(
+  StressOptions options,
+  StressScenario scenario, {
+  required NatsJetStreamStorage storage,
+  required String modeNote,
+}) async {
+  final id = _runId();
+  final topic = 'podbus.stress.jetstream.$id';
+  final queue = _natsJetStreamQueue(id, [topic], storage);
+
+  await queue.connect();
+  try {
+    final received = _Counter(scenario.messages);
+    final worker = await queue.worker<Map<String, Object?>>(
+      topic,
+      durableName: 'stress_workers',
+      concurrency: scenario.consumers,
+      handler: (_, payload) async {
+        await _sleep(scenario.handlerSleep);
+        received.add(payload['index'] as int);
+      },
+    );
+
+    late final Duration elapsed;
     try {
-      await _enqueueJobs(
-        scenario.messages,
-        scenario.producers,
-        (index) => queue.enqueue(topic, _payload(index, scenario.payloadSize)),
-      );
-
-      final received = _Counter(scenario.messages);
-      final worker = await queue.worker<Map<String, Object?>>(
-        topic,
-        durableName: 'stress_workers',
-        concurrency: scenario.consumers,
-        handler: (_, payload) async {
-          await _sleep(scenario.handlerSleep);
-          received.add(payload['index'] as int);
-        },
-      );
-
-      final elapsed = await _time(() async {
-        await received.done.timeout('''
-new_js = '''    await queue.connect();
-    try {
-      final received = _Counter(scenario.messages);
-      final worker = await queue.worker<Map<String, Object?>>(
-        topic,
-        durableName: 'stress_workers',
-        concurrency: scenario.consumers,
-        handler: (_, payload) async {
-          await _sleep(scenario.handlerSleep);
-          received.add(payload['index'] as int);
-        },
-      );
-
-      final elapsed = await _time(() async {
+      elapsed = await _time(() async {
         await _enqueueJobs(
           scenario.messages,
           scenario.producers,
@@ -198,44 +197,76 @@ new_js = '''    await queue.connect();
             _payload(index, scenario.payloadSize),
           ),
         );
-        await received.done.timeout('''
-if old_js not in source:
-    raise SystemExit('JetStream durable stress block not found')
-source = source.replace(old_js, new_js, 1)
+        await received.done.timeout(
+          _workerTimeout(
+            scenario.messages,
+            scenario.handlerSleep,
+            scenario.consumers,
+          ),
+        );
+      });
+    } finally {
+      await worker.close();
+    }
 
-old_rabbit_jobs = '''    await bus.connect();
+    return StressResult.completed(
+      scenario: scenario,
+      broker: options.broker,
+      machine: options.machine,
+      received: received.count,
+      elapsed: elapsed,
+      ackMode: 'manual',
+      durability: storage == NatsJetStreamStorage.file ? 'file' : 'memory',
+      publisherConfirms: 'JetStream PubAck',
+      notes: '$modeNote; end-to-end enqueue and delivery',
+    );
+  } finally {
+    await queue.close(timeout: const Duration(seconds: 5));
+  }
+}
+
+''',
+)
+
+replace_function(
+    '_stressRabbitMqJobs',
+    '_stressKafkaJobs',
+    r'''Future<StressResult> _stressRabbitMqJobs(
+  StressOptions options,
+  StressScenario scenario, {
+  required bool durable,
+  required String modeNote,
+}) async {
+  final id = _runId();
+  final topic = 'podbus.stress.rabbitmq.job.$id';
+  final bus = RabbitMqMessageBus(
+    config: RabbitMqMessagingConfig(
+      uri: Uri.parse(
+        _env('PODBUS_RABBITMQ_URL', 'amqp://guest:guest@localhost:5672'),
+      ),
+      exchange: 'podbus.stress.jobs.$id',
+      deadLetterExchange: 'podbus.stress.jobs.dead.$id',
+      durable: durable,
+      prefetchCount: math.max(1, scenario.consumers),
+      connectionName: 'podbus-stress-jobs-$id',
+    ),
+  );
+
+  await bus.connect();
+  try {
+    final received = _Counter(scenario.messages);
+    final worker = await bus.worker<Map<String, Object?>>(
+      topic,
+      concurrency: scenario.consumers,
+      handler: (_, payload) async {
+        await _sleep(scenario.handlerSleep);
+        received.add(payload['index'] as int);
+      },
+    );
+
+    late final Duration elapsed;
     try {
-      await _enqueueJobs(
-        scenario.messages,
-        scenario.producers,
-        (index) => bus.enqueue(topic, _payload(index, scenario.payloadSize)),
-      );
-
-      final received = _Counter(scenario.messages);
-      final worker = await bus.worker<Map<String, Object?>>(
-        topic,
-        concurrency: scenario.consumers,
-        handler: (_, payload) async {
-          await _sleep(scenario.handlerSleep);
-          received.add(payload['index'] as int);
-        },
-      );
-
-      final elapsed = await _time(() async {
-        await received.done.timeout('''
-new_rabbit_jobs = '''    await bus.connect();
-    try {
-      final received = _Counter(scenario.messages);
-      final worker = await bus.worker<Map<String, Object?>>(
-        topic,
-        concurrency: scenario.consumers,
-        handler: (_, payload) async {
-          await _sleep(scenario.handlerSleep);
-          received.add(payload['index'] as int);
-        },
-      );
-
-      final elapsed = await _time(() async {
+      elapsed = await _time(() async {
         await _enqueueJobs(
           scenario.messages,
           scenario.producers,
@@ -244,11 +275,38 @@ new_rabbit_jobs = '''    await bus.connect();
             _payload(index, scenario.payloadSize),
           ),
         );
-        await received.done.timeout('''
-if old_rabbit_jobs not in source:
-    raise SystemExit('RabbitMQ durable stress block not found')
-source = source.replace(old_rabbit_jobs, new_rabbit_jobs, 1)
-path.write_text(source)
+        await received.done.timeout(
+          _workerTimeout(
+            scenario.messages,
+            scenario.handlerSleep,
+            scenario.consumers,
+          ),
+        );
+      });
+    } finally {
+      await worker.close();
+    }
+
+    return StressResult.completed(
+      scenario: scenario,
+      broker: options.broker,
+      machine: options.machine,
+      received: received.count,
+      elapsed: elapsed,
+      ackMode: 'manual',
+      durability: durable ? 'persistent queue/message' : 'no',
+      publisherConfirms: 'AMQP confirm',
+      notes: '$modeNote; end-to-end enqueue and delivery',
+    );
+  } finally {
+    await bus.close(timeout: const Duration(seconds: 5));
+  }
+}
+
+''',
+)
+
+stress_path.write_text(source)
 
 workflow_path = Path('.github/workflows/stress.yml')
 workflow = workflow_path.read_text()
