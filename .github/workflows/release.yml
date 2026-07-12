@@ -11,16 +11,15 @@ permissions:
   attestations: write
 
 jobs:
-  release:
-    name: Verify and publish release artifacts
+  source-gate:
+    name: Verify release source
     runs-on: ubuntu-latest
-    timeout-minutes: 90
-    environment: release
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           fetch-depth: 0
-      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260
         with:
           sdk: 3.12.0
       - name: Resolve dependencies
@@ -39,35 +38,87 @@ jobs:
             packages/podbus_observability/test \
             packages/podbus_serverpod/test \
             --exclude-tags=integration
-      - name: Start production-gate brokers
-        run: docker compose -f docker-compose.integration.yaml up -d nats rabbitmq toxiproxy
+
+  fault-gate:
+    name: release fault / ${{ matrix.scenario }}
+    needs: source-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        scenario:
+          - nats-tcp-partition
+          - rabbitmq-tcp-partition
+          - rabbitmq-channel-failures
+          - nats-crash-before-ack
+          - rabbitmq-crash-before-ack
+          - multiple-replicas
+          - nats-broker-stop-before-confirm
+          - rabbitmq-broker-stop-before-confirm
+          - nats-shutdown-during-dlq-ack
+          - rabbitmq-shutdown-during-retry-confirm
+          - rabbitmq-shutdown-during-dlq-confirm
+          - slow-consumers
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260
+        with:
+          sdk: 3.12.0
+      - name: Resolve dependencies
+        run: dart pub get
+      - name: Start clean production-gate brokers
+        run: bash tool/ci/start_integration_services.sh nats rabbitmq toxiproxy
       - name: Wait for production-gate brokers
         run: |
           bash tool/ci/wait_for_nats.sh
           bash tool/ci/wait_for_rabbitmq.sh
           bash tool/ci/wait_for_toxiproxy.sh
-      - name: Run full broker fault gate
+      - name: Run isolated full fault scenario
         run: >-
           dart run tool/fault_suite.dart
           --profile=full
-          --report=test-results/release-fault-suite.json
+          --scenario=${{ matrix.scenario }}
+          --report=test-results/release-${{ matrix.scenario }}.json
       - name: Capture production-gate diagnostics
         if: always()
+        shell: bash
         run: |
           mkdir -p test-results
           docker compose -f docker-compose.integration.yaml logs --no-color \
-            nats rabbitmq toxiproxy > test-results/release-fault-brokers.log || true
+            nats rabbitmq-init rabbitmq toxiproxy \
+            > test-results/release-fault-brokers.log 2>&1 || true
+          bash tool/ci/capture_rabbitmq_state.sh || true
       - name: Upload production-gate diagnostics
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: release-broker-fault-diagnostics
+          name: release-fault-${{ matrix.scenario }}
           path: test-results
           if-no-files-found: warn
           retention-days: 90
       - name: Stop production-gate brokers
         if: always()
-        run: docker compose -f docker-compose.integration.yaml down -v
+        run: docker compose -f docker-compose.integration.yaml down -v --remove-orphans
+
+  release:
+    name: Publish verified release artifacts
+    needs:
+      - source-gate
+      - fault-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: release
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260
+        with:
+          sdk: 3.12.0
+      - name: Resolve dependencies
+        run: dart pub get
       - name: Verify tag matches package version
         shell: bash
         run: |
@@ -92,14 +143,14 @@ jobs:
           --name PodBus-${{ github.ref_name }}
           --output PodBus-${{ github.ref_name }}.spdx.json
       - name: Attest release artifacts
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
         with:
           subject-path: |
             PodBus-${{ github.ref_name }}.tar.gz
             PodBus-${{ github.ref_name }}.zip
             PodBus-${{ github.ref_name }}.spdx.json
       - name: Create GitHub release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
           generate_release_notes: true
           fail_on_unmatched_files: true
