@@ -262,54 +262,6 @@ jobs:
         if: always()
         run: docker compose -f docker-compose.integration.yaml down -v
 
-  generate-dart-amqp-patch:
-    name: Generate patched dart_amqp branch
-    if: >-
-      github.event_name == 'pull_request' &&
-      github.head_ref == 'fix/rabbitmq-publisher-lanes' &&
-      github.actor != 'github-actions[bot]'
-    permissions:
-      contents: write
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          ref: fix/rabbitmq-publisher-lanes
-          fetch-depth: 0
-      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260
-        with:
-          sdk: ${{ env.DART_SDK }}
-      - name: Vendor pinned upstream source
-        run: |
-          set -euo pipefail
-          rm -rf third_party/dart_amqp /tmp/dart_amqp
-          git clone --filter=blob:none --no-checkout \
-            https://github.com/achilleasa/dart_amqp.git /tmp/dart_amqp
-          git -C /tmp/dart_amqp checkout --detach \
-            577c34cead6c559eec3cda0bf002c45b19f8500b
-          mkdir -p third_party/dart_amqp
-          rsync -a \
-            --exclude=.git \
-            --exclude=.github \
-            --exclude=coverage \
-            /tmp/dart_amqp/ third_party/dart_amqp/
-      - name: Apply reproducible patches
-        run: python3 tool/ci/vendor_dart_amqp_patch.py
-      - name: Resolve workspace
-        run: dart pub get
-      - name: Publish generated commit
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            third_party/dart_amqp \
-            packages/podbus_rabbitmq/pubspec.yaml \
-            pubspec.yaml pubspec.lock
-          git commit -m "Patch dart_amqp publisher confirmations"
-          git push --force origin HEAD:automation/dart-amqp-confirm-fix
-
   production-gate:
     name: Production gate
     if: always()
