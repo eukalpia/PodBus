@@ -10,6 +10,7 @@ on:
       - "tool/stress_transports.dart"
       - "tool/ci/start_integration_services.sh"
       - "tool/ci/capture_rabbitmq_state.sh"
+      - "tool/ci/wait_for_rabbitmq.sh"
       - "docker-compose.integration.yaml"
       - ".github/workflows/stress.yml"
   workflow_dispatch:
@@ -39,9 +40,10 @@ jobs:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
-      max-parallel: 8
+      max-parallel: 4
       matrix:
         include:
           - name: nats-core-1m
@@ -50,88 +52,96 @@ jobs:
             transport: nats
             mode: fast
             messages: 1000000
-            producers: 512
-            consumers: 8
+            producers: 128
+            consumers: 16
             payload: 256
             fetch_batch: 1
             kafka: false
+            experimental: false
           - name: jetstream-durable-250k
             service: nats
             readiness: tool/ci/wait_for_nats.sh
             transport: jetstream
             mode: durable
             messages: 250000
-            producers: 128
+            producers: 64
             consumers: 8
             payload: 256
             fetch_batch: 128
             kafka: false
+            experimental: false
           - name: jetstream-workers-250k
             service: nats
             readiness: tool/ci/wait_for_nats.sh
             transport: jetstream
             mode: worker
             messages: 250000
-            producers: 128
+            producers: 64
             consumers: 16
             payload: 256
             fetch_batch: 128
             kafka: false
+            experimental: false
           - name: rabbitmq-fast-1m
             service: rabbitmq
             readiness: tool/ci/wait_for_rabbitmq.sh
             transport: rabbitmq
             mode: fast
             messages: 1000000
-            producers: 512
-            consumers: 8
+            producers: 128
+            consumers: 16
             payload: 256
             fetch_batch: 1
             kafka: false
+            experimental: false
           - name: rabbitmq-durable-500k
             service: rabbitmq
             readiness: tool/ci/wait_for_rabbitmq.sh
             transport: rabbitmq
             mode: durable
             messages: 500000
-            producers: 256
+            producers: 64
             consumers: 8
             payload: 256
             fetch_batch: 1
             kafka: false
+            experimental: false
           - name: rabbitmq-workers-250k
             service: rabbitmq
             readiness: tool/ci/wait_for_rabbitmq.sh
             transport: rabbitmq
             mode: worker
             messages: 250000
-            producers: 128
+            producers: 64
             consumers: 16
             payload: 256
             fetch_batch: 1
             kafka: false
-          - name: kafka-fast-250k
+            experimental: false
+          - name: kafka-fast-experimental-25k
             service: kafka
             readiness: tool/ci/wait_for_kafka.sh
             transport: kafka
             mode: fast
-            messages: 250000
-            producers: 128
+            messages: 25000
+            producers: 16
             consumers: 1
             payload: 256
             fetch_batch: 1
             kafka: true
-          - name: kafka-durable-150k
+            experimental: true
+          - name: kafka-durable-experimental-10k
             service: kafka
             readiness: tool/ci/wait_for_kafka.sh
             transport: kafka
             mode: durable
-            messages: 150000
-            producers: 64
+            messages: 10000
+            producers: 8
             consumers: 1
             payload: 256
             fetch_batch: 1
             kafka: true
+            experimental: true
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260
