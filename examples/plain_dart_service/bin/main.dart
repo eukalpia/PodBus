@@ -67,10 +67,13 @@ Future<void> main() async {
       await _handleRequest(request, processed, shutdown);
     } on Object catch (error, stackTrace) {
       stderr.writeln('HTTP handler failed: $error\n$stackTrace');
-      if (!request.response.headersSent) {
+      try {
         request.response.statusCode = HttpStatus.internalServerError;
+        request.response.write(jsonEncode({'error': 'internal server error'}));
+        await request.response.close();
+      } on Object {
+        // The response may already have been committed by the failing handler.
       }
-      await request.response.close();
     }
   });
 
@@ -84,7 +87,7 @@ Future<void> main() async {
           }
         }),
       );
-    } on UnsupportedError {
+    } on Object {
       // Signal streams are not available on every platform.
     }
   }
