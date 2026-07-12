@@ -9,13 +9,11 @@ services:
       - nats-data:/data
 
   rabbitmq:
-    image: rabbitmq:3.13.7-management-alpine
+    image: rabbitmq:3.13.7-management
     hostname: rabbitmq
     environment:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
-    volumes:
-      - rabbitmq-data:/var/lib/rabbitmq/mnesia
     ports:
       - "5672:5672"
       - "15672:15672"
@@ -83,4 +81,3 @@ services:
 
 volumes:
   nats-data:
-  rabbitmq-data:
