@@ -1,6 +1,12 @@
 name: Apply dart_amqp publisher-confirm fix
 
 on:
+  push:
+    branches:
+      - fix/rabbitmq-publisher-lanes
+    paths:
+      - ".github/workflows/apply-dart-amqp-confirm-fix.yml"
+      - "tool/qualification/dart-amqp-confirm-fix-trigger.txt"
   pull_request:
     paths:
       - ".github/workflows/apply-dart-amqp-confirm-fix.yml"
