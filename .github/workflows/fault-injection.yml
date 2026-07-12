@@ -38,9 +38,26 @@ env:
 
 jobs:
   broker-faults:
-    name: NATS and RabbitMQ broker faults
+    name: fault / ${{ matrix.scenario }}
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        scenario:
+          - nats-tcp-partition
+          - rabbitmq-tcp-partition
+          - rabbitmq-channel-failures
+          - nats-crash-before-ack
+          - rabbitmq-crash-before-ack
+          - multiple-replicas
+          - nats-broker-stop-before-confirm
+          - rabbitmq-broker-stop-before-confirm
+          - nats-shutdown-during-dlq-ack
+          - rabbitmq-shutdown-during-retry-confirm
+          - rabbitmq-shutdown-during-dlq-confirm
+          - slow-consumers
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260
@@ -55,11 +72,12 @@ jobs:
           bash tool/ci/wait_for_nats.sh
           bash tool/ci/wait_for_rabbitmq.sh
           bash tool/ci/wait_for_toxiproxy.sh
-      - name: Run broker-backed fault suite
+      - name: Run isolated broker fault scenario
         run: >-
           dart run tool/fault_suite.dart
           --profile=${PROFILE}
-          --report=test-results/fault-suite.json
+          --scenario=${{ matrix.scenario }}
+          --report=test-results/fault-${{ matrix.scenario }}.json
       - name: Capture broker logs
         if: always()
         shell: bash
@@ -75,7 +93,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: broker-fault-diagnostics-${{ env.PROFILE }}
+          name: fault-${{ matrix.scenario }}-${{ env.PROFILE }}
           path: test-results
           if-no-files-found: error
           retention-days: 30
