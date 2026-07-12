@@ -17,8 +17,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: fault-injection-${{ github.ref }}
-  cancel-in-progress: false
+  group: podbus-broker-fault-qualification
+  cancel-in-progress: true
 
 env:
   DART_SDK: 3.12.0
