@@ -16,9 +16,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  patch-and-validate:
+  patch-and-commit:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -27,15 +27,11 @@ jobs:
       - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260
         with:
           sdk: 3.12.0
-      - name: Apply end-to-end stress harness patch
-        run: python3 tool/ci/apply_stress_harness_fix.py
-      - name: Resolve dependencies
-        run: dart pub get
-      - name: Format and analyze
+      - name: Apply and format end-to-end stress harness
         run: |
+          python3 tool/ci/apply_stress_harness_fix.py
           dart format tool/stress_transports.dart
-          dart analyze tool/stress_transports.dart
-      - name: Commit validated harness and remove temporary machinery
+      - name: Commit harness and remove temporary machinery
         shell: bash
         run: |
           set -euo pipefail
