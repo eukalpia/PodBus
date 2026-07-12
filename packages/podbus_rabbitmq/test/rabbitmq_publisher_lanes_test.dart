@@ -21,17 +21,17 @@ void main() {
       ];
 
       await _waitUntil(
-        () => client.channels[0].exchange.publishes.length == 1 &&
-            client.channels[1].exchange.publishes.length == 1,
+        () => client.channels[0].exchangeRef.publishes.length == 1 &&
+            client.channels[1].exchangeRef.publishes.length == 1,
       );
-      expect(client.channels[0].exchange.publishes.length, 1);
-      expect(client.channels[1].exchange.publishes.length, 1);
+      expect(client.channels[0].exchangeRef.publishes.length, 1);
+      expect(client.channels[1].exchangeRef.publishes.length, 1);
 
       client.channels[0].confirmNext();
       client.channels[1].confirmNext();
 
       await _waitUntil(
-        () => client.channels[0].exchange.publishes.length == 2,
+        () => client.channels[0].exchangeRef.publishes.length == 2,
       );
       client.channels[0].confirmNext();
 
@@ -40,7 +40,7 @@ void main() {
       expect(
         client.channels
             .take(2)
-            .expand((channel) => channel.exchange.publishes)
+            .expand((channel) => channel.exchangeRef.publishes)
             .length,
         3,
       );
@@ -57,14 +57,14 @@ void main() {
       final second = _publish(adapter, 2);
 
       await _waitUntil(
-        () => client.channels.first.exchange.publishes.length == 1,
+        () => client.channels.first.exchangeRef.publishes.length == 1,
       );
       await Future<void>.delayed(const Duration(milliseconds: 10));
-      expect(client.channels.first.exchange.publishes.length, 1);
+      expect(client.channels.first.exchangeRef.publishes.length, 1);
 
       client.channels.first.confirmNext();
       await _waitUntil(
-        () => client.channels.first.exchange.publishes.length == 2,
+        () => client.channels.first.exchangeRef.publishes.length == 2,
       );
       client.channels.first.confirmNext();
 
@@ -80,14 +80,14 @@ void main() {
 
       final first = _publish(adapter, 1);
       await _waitUntil(
-        () => client.channels.first.exchange.publishes.length == 1,
+        () => client.channels.first.exchangeRef.publishes.length == 1,
       );
       client.channels.first.confirmNext(published: false);
       await expectLater(first, throwsA(isA<Exception>()));
 
       final second = _publish(adapter, 2);
       await _waitUntil(
-        () => client.channels.first.exchange.publishes.length == 2,
+        () => client.channels.first.exchangeRef.publishes.length == 2,
       );
       client.channels.first.confirmNext();
       await second.timeout(const Duration(seconds: 2));
@@ -171,14 +171,14 @@ final class _FakeClient implements amqp.Client {
 }
 
 final class _FakeChannel implements amqp.Channel {
-  final exchange = _FakeExchange();
+  final exchangeRef = _FakeExchange();
   final _confirmations =
       StreamController<amqp.PublishNotification>.broadcast();
   final _returns = StreamController<amqp.BasicReturnMessage>.broadcast();
   var _nextConfirmation = 0;
 
   void confirmNext({bool published = true}) {
-    final properties = exchange.publishes[_nextConfirmation].properties;
+    final properties = exchangeRef.publishes[_nextConfirmation].properties;
     _nextConfirmation += 1;
     _confirmations.add(
       _FakePublishNotification(
@@ -223,7 +223,7 @@ final class _FakeChannel implements amqp.Channel {
     bool declare = true,
     Map<String, Object> arguments = const {},
   }) async {
-    return exchange;
+    return exchangeRef;
   }
 
   @override
