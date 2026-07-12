@@ -1,0 +1,6 @@
+Final PodBus beta-candidate qualification trigger
+
+Runtime baseline: 14d19fc9d23cf4fa59454c394484888030fa0a8a
+Workflow baseline: 9df908e4a9eb7b579271adc754a6e5bf241173de
+
+This marker starts the single authoritative fault, stress, soak, CI, compatibility, and security qualification after superseded-run cancellation was enabled.
