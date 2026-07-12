@@ -11,20 +11,22 @@ services:
   rabbitmq-init:
     image: rabbitmq:3.13.7-management
     user: "0:0"
-    entrypoint: ["/bin/sh", "-ec"]
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        mkdir -p /var/lib/rabbitmq
+        find /var/lib/rabbitmq -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+        printf '%s' "$${RABBITMQ_ERLANG_COOKIE}" > /var/lib/rabbitmq/.erlang.cookie
+        chown -R rabbitmq:rabbitmq /var/lib/rabbitmq
+        chmod 700 /var/lib/rabbitmq
+        chmod 400 /var/lib/rabbitmq/.erlang.cookie
+        echo "Prepared RabbitMQ state:"
+        id rabbitmq
+        ls -lan /var/lib/rabbitmq
+        stat -c '%u:%g %a %n' /var/lib/rabbitmq /var/lib/rabbitmq/.erlang.cookie
     environment:
       RABBITMQ_ERLANG_COOKIE: "PODBUS_INTEGRATION_COOKIE_2026"
-    command: |
-      mkdir -p /var/lib/rabbitmq
-      find /var/lib/rabbitmq -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-      printf '%s' "$${RABBITMQ_ERLANG_COOKIE}" > /var/lib/rabbitmq/.erlang.cookie
-      chown -R rabbitmq:rabbitmq /var/lib/rabbitmq
-      chmod 700 /var/lib/rabbitmq
-      chmod 400 /var/lib/rabbitmq/.erlang.cookie
-      echo "Prepared RabbitMQ state:"
-      id rabbitmq
-      ls -lan /var/lib/rabbitmq
-      stat -c '%u:%g %a %n' /var/lib/rabbitmq /var/lib/rabbitmq/.erlang.cookie
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
     restart: "no"
