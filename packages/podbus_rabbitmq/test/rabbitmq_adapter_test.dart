@@ -103,6 +103,47 @@ void main() {
       );
     });
 
+    test('channel operation failures mark the adapter disconnected', () async {
+      final client = FakeAmqpClient();
+      final adapter = DartRabbitMqAdapter(client: client);
+      await adapter.connect(_config());
+      client.channelRef.exchangeError = StateError('channel closed');
+
+      await expectLater(
+        adapter.declareExchange(name: 'podbus.events', durable: true),
+        throwsA(isA<MessagingConnectionException>()),
+      );
+      expect(adapter.isConnected, isFalse);
+      await adapter.close();
+    });
+
+    test(
+      'client errors disconnect the adapter and fail pending confirms',
+      () async {
+        final client = FakeAmqpClient();
+        final adapter = DartRabbitMqAdapter(client: client);
+        await adapter.connect(_config());
+        await adapter.declareExchange(name: 'podbus.events', durable: true);
+
+        final publish = adapter.publish(
+          exchange: 'podbus.events',
+          routingKey: 'leads.created',
+          bytes: [1, 2, 3],
+          headers: const {'podbus-content-type': 'application/json'},
+          persistent: true,
+        );
+        await Future<void>.delayed(Duration.zero);
+        client.emitError(Exception('publisher channel closed'));
+
+        await expectLater(
+          publish,
+          throwsA(isA<MessagingConnectionException>()),
+        );
+        expect(adapter.isConnected, isFalse);
+        await adapter.close();
+      },
+    );
+
     test('times out when publisher confirmation does not arrive', () async {
       final client = FakeAmqpClient();
       final adapter = DartRabbitMqAdapter(client: client);
@@ -141,6 +182,11 @@ final class FakeAmqpClient implements amqp.Client {
   final channelRef = FakeAmqpChannel();
   final _errors = StreamController<Exception>.broadcast();
   var connected = false;
+
+  void emitError(Exception error) {
+    _errors.add(error);
+  }
+
   var closed = false;
 
   @override
@@ -189,6 +235,7 @@ final class FakeAmqpChannel implements amqp.Channel {
   final _returnedMessages =
       StreamController<amqp.BasicReturnMessage>.broadcast();
   var confirmRequested = false;
+  Object? exchangeError;
   var closed = false;
 
   void confirmPublish(
@@ -242,6 +289,7 @@ final class FakeAmqpChannel implements amqp.Channel {
     bool declare = true,
     Map<String, Object> arguments = const {},
   }) async {
+    if (exchangeError case final error?) throw error;
     exchangeRef
       ..exchangeName = name
       ..exchangeType = type;

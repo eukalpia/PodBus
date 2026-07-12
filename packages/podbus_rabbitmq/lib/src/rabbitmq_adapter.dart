@@ -74,6 +74,7 @@ final class DartRabbitMqAdapter implements RabbitMqAdapter {
   amqp.Channel? _consumerChannel;
   StreamSubscription<amqp.PublishNotification>? _publishNotifications;
   StreamSubscription<amqp.BasicReturnMessage>? _returnedMessages;
+  StreamSubscription<Exception>? _clientErrors;
   final Map<String, amqp.Exchange> _publisherExchanges = {};
   final Map<String, amqp.Exchange> _consumerExchanges = {};
   final Map<String, amqp.Queue> _queues = {};
@@ -91,19 +92,21 @@ final class DartRabbitMqAdapter implements RabbitMqAdapter {
     required String queue,
     required String exchange,
     required String routingKey,
-  }) async {
-    final queueRef =
-        _queues[queue] ?? await _consumerCh.queue(queue, declare: false);
-    final exchangeRef =
-        _consumerExchanges[exchange] ??
-        await _consumerCh.exchange(
-          exchange,
-          amqp.ExchangeType.TOPIC,
-          declare: false,
-        );
-    await queueRef.bind(exchangeRef, routingKey);
-    _queues[queue] = queueRef;
-    _consumerExchanges[exchange] = exchangeRef;
+  }) {
+    return _channelOperation('queue binding', () async {
+      final queueRef =
+          _queues[queue] ?? await _consumerCh.queue(queue, declare: false);
+      final exchangeRef =
+          _consumerExchanges[exchange] ??
+          await _consumerCh.exchange(
+            exchange,
+            amqp.ExchangeType.TOPIC,
+            declare: false,
+          );
+      await queueRef.bind(exchangeRef, routingKey);
+      _queues[queue] = queueRef;
+      _consumerExchanges[exchange] = exchangeRef;
+    });
   }
 
   @override
@@ -116,8 +119,10 @@ final class DartRabbitMqAdapter implements RabbitMqAdapter {
     );
     await _publishNotifications?.cancel();
     await _returnedMessages?.cancel();
+    await _clientErrors?.cancel();
     _publishNotifications = null;
     _returnedMessages = null;
+    _clientErrors = null;
     await _publisherChannel?.close();
     await _consumerChannel?.close();
     await _client?.close();
@@ -141,7 +146,7 @@ final class DartRabbitMqAdapter implements RabbitMqAdapter {
         Uri.decodeComponent(_password(uri.userInfo) ?? 'guest'),
       ),
       connectTimeout: config.connectTimeout,
-      connectionName: 'podbus-rabbitmq',
+      connectionName: config.connectionName,
       maxConnectionAttempts: config.maxConnectionAttempts,
       reconnectWaitTime: config.reconnectWaitTime,
       tlsContext: uri.scheme == 'amqps'
@@ -152,6 +157,28 @@ final class DartRabbitMqAdapter implements RabbitMqAdapter {
     final client = _client ?? amqp.Client(settings: settings);
     await client.connect();
     _client = client;
+    await _clientErrors?.cancel();
+    _clientErrors = client.errorListener(
+      _handleClientError,
+      onError: (Object error, StackTrace stackTrace) {
+        _handleClientError(
+          MessagingConnectionException(
+            'RabbitMQ client error stream failed.',
+            cause: error,
+            stackTrace: stackTrace,
+          ),
+        );
+      },
+      onDone: () {
+        if (_connected) {
+          _handleClientError(
+            const MessagingConnectionException(
+              'RabbitMQ client error stream closed unexpectedly.',
+            ),
+          );
+        }
+      },
+    );
     _publisherChannel = await client.channel();
     _consumerChannel = await client.channel();
     _publisherConfirmTimeout = config.publisherConfirmTimeout;
@@ -188,29 +215,30 @@ final class DartRabbitMqAdapter implements RabbitMqAdapter {
   Future<RabbitMqConsumer> consume({
     required String queue,
     required bool noAck,
-  }) async {
-    final queueRef =
-        _queues[queue] ?? await _consumerCh.queue(queue, declare: false);
-    _queues[queue] = queueRef;
-    final consumer = await queueRef.consume(noAck: noAck);
-    return _DartRabbitMqConsumer(consumer);
+  }) {
+    return _channelOperation('consumer creation', () async {
+      final queueRef =
+          _queues[queue] ?? await _consumerCh.queue(queue, declare: false);
+      _queues[queue] = queueRef;
+      final consumer = await queueRef.consume(noAck: noAck);
+      return _DartRabbitMqConsumer(consumer);
+    });
   }
 
   @override
-  Future<void> declareExchange({
-    required String name,
-    required bool durable,
-  }) async {
-    _publisherExchanges[name] = await _publisherCh.exchange(
-      name,
-      amqp.ExchangeType.TOPIC,
-      durable: durable,
-    );
-    _consumerExchanges[name] = await _consumerCh.exchange(
-      name,
-      amqp.ExchangeType.TOPIC,
-      durable: durable,
-    );
+  Future<void> declareExchange({required String name, required bool durable}) {
+    return _channelOperation('exchange declaration', () async {
+      _publisherExchanges[name] = await _publisherCh.exchange(
+        name,
+        amqp.ExchangeType.TOPIC,
+        durable: durable,
+      );
+      _consumerExchanges[name] = await _consumerCh.exchange(
+        name,
+        amqp.ExchangeType.TOPIC,
+        durable: durable,
+      );
+    });
   }
 
   @override
@@ -220,21 +248,23 @@ final class DartRabbitMqAdapter implements RabbitMqAdapter {
     bool exclusive = false,
     bool autoDelete = false,
     Map<String, Object?> arguments = const {},
-  }) async {
-    final queueArguments = <String, Object>{};
-    for (final MapEntry(:key, :value) in arguments.entries) {
-      if (value != null) {
-        queueArguments[key] = value;
+  }) {
+    return _channelOperation('queue declaration', () async {
+      final queueArguments = <String, Object>{};
+      for (final MapEntry(:key, :value) in arguments.entries) {
+        if (value != null) {
+          queueArguments[key] = value;
+        }
       }
-    }
 
-    _queues[name] = await _consumerCh.queue(
-      name,
-      durable: durable,
-      exclusive: exclusive,
-      autoDelete: autoDelete,
-      arguments: queueArguments,
-    );
+      _queues[name] = await _consumerCh.queue(
+        name,
+        durable: durable,
+        exclusive: exclusive,
+        autoDelete: autoDelete,
+        arguments: queueArguments,
+      );
+    });
   }
 
   @override
@@ -281,17 +311,22 @@ final class DartRabbitMqAdapter implements RabbitMqAdapter {
       rethrow;
     } on Object catch (error, stackTrace) {
       _pendingPublishes.remove(publishId);
-      throw MessagingConnectionException(
+      final failure = MessagingConnectionException(
         'Failed to publish RabbitMQ message.',
         cause: error,
         stackTrace: stackTrace,
       );
+      _handleClientError(failure);
+      throw failure;
     }
   }
 
   @override
-  Future<void> setPrefetchCount(int count) async {
-    await _consumerCh.qos(null, count, global: false);
+  Future<void> setPrefetchCount(int count) {
+    return _channelOperation(
+      'QoS configuration',
+      () => _consumerCh.qos(null, count, global: false),
+    );
   }
 
   amqp.Channel get _publisherCh {
@@ -308,6 +343,35 @@ final class DartRabbitMqAdapter implements RabbitMqAdapter {
       throw StateError('RabbitMQ consumer channel is not connected.');
     }
     return channel;
+  }
+
+  Future<T> _channelOperation<T>(
+    String operation,
+    Future<T> Function() action,
+  ) async {
+    try {
+      return await action();
+    } on MessagingException {
+      rethrow;
+    } on Object catch (error, stackTrace) {
+      final failure = MessagingConnectionException(
+        'RabbitMQ $operation failed.',
+        cause: error,
+        stackTrace: stackTrace,
+      );
+      _handleClientError(failure);
+      throw failure;
+    }
+  }
+
+  void _handleClientError(Exception error) {
+    _connected = false;
+    _failPendingPublishes(
+      MessagingConnectionException(
+        'RabbitMQ client or channel failed.',
+        cause: error,
+      ),
+    );
   }
 
   String _nextPublishId() {

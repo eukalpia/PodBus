@@ -33,6 +33,59 @@ void main() {
       await queue.close();
     });
 
+    test('propagates durable consumer limits to the adapter', () async {
+      final adapter = FakeNatsJetStreamAdapter();
+      final queue = NatsJetStreamJobQueue(
+        config: NatsMessagingConfig(
+          servers: [Uri.parse('nats://localhost:4222')],
+          jetStream: const NatsJetStreamConfig(
+            enabled: true,
+            streamName: 'PODBUS_TESTS',
+            subjects: ['jobs.>'],
+            consumerConfig: NatsJetStreamConsumerConfig(
+              ackWait: Duration(seconds: 7),
+              maxDeliver: 9,
+              maxAckPending: 77,
+            ),
+          ),
+        ),
+        jetStreamAdapter: adapter,
+      );
+
+      await queue.connect();
+      await queue.worker<int>(
+        'jobs.email',
+        durableName: 'limits-workers',
+        handler: (_, _) async {},
+      );
+
+      final limits = adapter.consumerConfigs.single;
+      expect(limits.ackWait, const Duration(seconds: 7));
+      expect(limits.maxDeliver, 9);
+      expect(limits.maxAckPending, 77);
+      await queue.close();
+    });
+
+    test('rejects invalid durable consumer limits', () async {
+      final queue = NatsJetStreamJobQueue(
+        config: NatsMessagingConfig(
+          servers: [Uri.parse('nats://localhost:4222')],
+          jetStream: const NatsJetStreamConfig(
+            enabled: true,
+            streamName: 'PODBUS_TESTS',
+            subjects: ['jobs.>'],
+            consumerConfig: NatsJetStreamConsumerConfig(ackWait: Duration.zero),
+          ),
+        ),
+        jetStreamAdapter: FakeNatsJetStreamAdapter(),
+      );
+
+      await expectLater(
+        queue.connect(),
+        throwsA(isA<MessagingConfigurationException>()),
+      );
+    });
+
     test('acks a job after successful handling', () async {
       final adapter = FakeNatsJetStreamAdapter();
       final queue = NatsJetStreamJobQueue(
@@ -290,6 +343,7 @@ final class FakeNatsJetStreamAdapter implements NatsJetStreamAdapter {
   final createdStreams = <NatsJetStreamConfig>[];
   final published = <FakeJetStreamPublish>[];
   final consumers = <FakeNatsJetStreamConsumer>[];
+  final consumerConfigs = <NatsJetStreamConsumerConfig>[];
   Object? publishError;
   var connected = false;
 
@@ -311,7 +365,9 @@ final class FakeNatsJetStreamAdapter implements NatsJetStreamAdapter {
     required String streamName,
     required String consumerName,
     required String topic,
+    required NatsJetStreamConsumerConfig config,
   }) async {
+    consumerConfigs.add(config);
     final consumer = FakeNatsJetStreamConsumer(
       streamName: streamName,
       consumerName: consumerName,

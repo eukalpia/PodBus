@@ -188,6 +188,7 @@ final class NatsJetStreamJobQueue implements DurableJobQueue {
       streamName: streamName,
       consumerName: consumerName,
       topic: topic,
+      config: _requireJetStreamConfig().consumerConfig,
     );
     final worker = _NatsJetStreamWorker<T>(
       topic: topic,
@@ -406,6 +407,28 @@ final class NatsJetStreamJobQueue implements DurableJobQueue {
     if (jetStream.subjects.isEmpty) {
       throw const MessagingConfigurationException(
         'NATS JetStream subjects cannot be empty.',
+      );
+    }
+    final consumer = jetStream.consumerConfig;
+    if (consumer.ackWait <= Duration.zero) {
+      throw const MessagingConfigurationException(
+        'NATS JetStream consumer ackWait must be greater than zero.',
+      );
+    }
+    if (consumer.maxDeliver == 0 || consumer.maxDeliver < -1) {
+      throw const MessagingConfigurationException(
+        'NATS JetStream consumer maxDeliver must be -1 or greater than zero.',
+      );
+    }
+    if (consumer.maxAckPending < 1) {
+      throw const MessagingConfigurationException(
+        'NATS JetStream consumer maxAckPending must be greater than zero.',
+      );
+    }
+    final idleHeartbeat = consumer.idleHeartbeat;
+    if (idleHeartbeat != null && idleHeartbeat <= Duration.zero) {
+      throw const MessagingConfigurationException(
+        'NATS JetStream consumer idleHeartbeat must be greater than zero.',
       );
     }
   }

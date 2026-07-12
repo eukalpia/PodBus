@@ -1,10 +1,12 @@
 services:
   nats:
     image: nats:2.10
-    command: ["-js", "-m", "8222"]
+    command: ["-js", "-sd", "/data", "-m", "8222"]
     ports:
       - "4222:4222"
       - "8222:8222"
+    volumes:
+      - nats-data:/data
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8222/healthz"]
       interval: 2s
@@ -15,16 +17,11 @@ services:
     image: rabbitmq:3.13.7-management-alpine
     hostname: rabbitmq
     environment:
-      HOME: /tmp/rabbitmq
-      RABBITMQ_DATA_DIR: /tmp/rabbitmq
-      RABBITMQ_MNESIA_BASE: /tmp/rabbitmq/mnesia
-      RABBITMQ_LOG_BASE: /tmp/rabbitmq/log
-      RABBITMQ_PID_FILE: /tmp/rabbitmq/rabbitmq.pid
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
       RABBITMQ_ERLANG_COOKIE: podbus-integration-cookie
-    tmpfs:
-      - /tmp/rabbitmq:uid=100,gid=101,mode=0770
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
     ports:
       - "5672:5672"
       - "15672:15672"
@@ -32,6 +29,24 @@ services:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 2s
       timeout: 5s
+      retries: 30
+
+  toxiproxy:
+    image: shopify/toxiproxy:2.9.0
+    command: ["-host", "0.0.0.0"]
+    depends_on:
+      nats:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    ports:
+      - "8474:8474"
+      - "14222:14222"
+      - "15670:15670"
+    healthcheck:
+      test: ["CMD", "/toxiproxy-cli", "list"]
+      interval: 2s
+      timeout: 3s
       retries: 30
 
   kafka:
@@ -73,3 +88,7 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+
+volumes:
+  nats-data:
+  rabbitmq-data:

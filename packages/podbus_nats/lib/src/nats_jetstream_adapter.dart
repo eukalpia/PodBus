@@ -25,6 +25,7 @@ abstract interface class NatsJetStreamAdapter {
     required String streamName,
     required String consumerName,
     required String topic,
+    required NatsJetStreamConsumerConfig config,
   });
 
   Future<NatsJetStreamPublishAck> publish(
@@ -119,14 +120,17 @@ final class DartNatsJetStreamAdapter implements NatsJetStreamAdapter {
     required String streamName,
     required String consumerName,
     required String topic,
+    required NatsJetStreamConsumerConfig config,
   }) async {
     final consumer = await _js.createOrUpdateConsumer<dynamic>(
       streamName,
-      nats.ConsumerConfig(
+      _PodBusConsumerConfig(
         durable: consumerName,
         filterSubject: topic,
-        ackPolicy: 'explicit',
-        deliverPolicy: 'all',
+        ackWait: config.ackWait,
+        maxDeliver: config.maxDeliver,
+        maxAckPending: config.maxAckPending,
+        idleHeartbeat: config.idleHeartbeat,
       ),
     );
     return _DartNatsJetStreamConsumer(consumer);
@@ -181,6 +185,31 @@ final class DartNatsJetStreamAdapter implements NatsJetStreamAdapter {
       throw StateError('NATS JetStream adapter is not connected.');
     }
     return jetStream;
+  }
+}
+
+final class _PodBusConsumerConfig extends nats.ConsumerConfig {
+  _PodBusConsumerConfig({
+    required super.durable,
+    required super.filterSubject,
+    required this.ackWait,
+    required this.maxDeliver,
+    required this.maxAckPending,
+    super.idleHeartbeat,
+  }) : super(ackPolicy: 'explicit', deliverPolicy: 'all');
+
+  final Duration ackWait;
+  final int maxDeliver;
+  final int maxAckPending;
+
+  @override
+  Map<String, dynamic> toJson() {
+    return {
+      ...super.toJson(),
+      'ack_wait': ackWait.inMicroseconds * 1000,
+      'max_deliver': maxDeliver,
+      'max_ack_pending': maxAckPending,
+    };
   }
 }
 

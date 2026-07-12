@@ -48,6 +48,7 @@ final class NatsJetStreamConfig {
     this.maxAge,
     this.maxMsgs,
     this.replicas,
+    this.consumerConfig = const NatsJetStreamConsumerConfig(),
   });
 
   final bool enabled;
@@ -58,6 +59,30 @@ final class NatsJetStreamConfig {
   final Duration? maxAge;
   final int? maxMsgs;
   final int? replicas;
+  final NatsJetStreamConsumerConfig consumerConfig;
+}
+
+/// Durable pull-consumer limits used by PodBus workers.
+final class NatsJetStreamConsumerConfig {
+  const NatsJetStreamConsumerConfig({
+    this.ackWait = const Duration(seconds: 30),
+    this.maxDeliver = -1,
+    this.maxAckPending = 1000,
+    this.idleHeartbeat,
+  });
+
+  /// Time the broker waits for an acknowledgement before redelivery.
+  final Duration ackWait;
+
+  /// Maximum delivery attempts. `-1` means unlimited.
+  final int maxDeliver;
+
+  /// Maximum number of unacknowledged deliveries for this consumer.
+  final int maxAckPending;
+
+  /// Optional broker heartbeat for idle push consumers. Kept here so the wire
+  /// configuration remains complete even though PodBus uses pull consumers.
+  final Duration? idleHeartbeat;
 }
 
 enum NatsJetStreamStorage { file, memory }

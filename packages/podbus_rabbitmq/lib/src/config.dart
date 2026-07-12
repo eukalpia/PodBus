@@ -16,6 +16,7 @@ final class RabbitMqMessagingConfig {
     this.useBrokerRetryQueues = true,
     this.maxConnectionAttempts = 5,
     this.reconnectWaitTime = const Duration(seconds: 2),
+    this.connectionName = 'podbus-rabbitmq',
     this.tlsContext,
     this.onBadCertificate,
   }) {
@@ -59,6 +60,11 @@ final class RabbitMqMessagingConfig {
         'RabbitMQ reconnectWaitTime must not be negative.',
       );
     }
+    if (connectionName.trim().isEmpty) {
+      throw const MessagingConfigurationException(
+        'RabbitMQ connectionName must not be empty.',
+      );
+    }
   }
 
   final Uri uri;
@@ -73,6 +79,7 @@ final class RabbitMqMessagingConfig {
   final bool useBrokerRetryQueues;
   final int maxConnectionAttempts;
   final Duration reconnectWaitTime;
+  final String connectionName;
   final SecurityContext? tlsContext;
   final bool Function(X509Certificate certificate)? onBadCertificate;
 
