@@ -30,12 +30,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p /tmp/podbus-export/repository /tmp/podbus-export/dependencies
+          mkdir -p /tmp/podbus-export/repository
           tar --exclude=.git --exclude=.dart_tool -czf /tmp/podbus-export/repository/podbus-source.tar.gz .
-          find "$PUB_CACHE/hosted" -maxdepth 3 -type d \( -name 'dart_nats-*' -o -name 'dart_amqp-*' \) -print0 |
-            while IFS= read -r -d '' directory; do
-              cp -R "$directory" /tmp/podbus-export/dependencies/
-            done
+          tar -C "$PUB_CACHE" -czf /tmp/podbus-pub-cache.tar.gz hosted
           tar -C /tmp/podbus-export -czf /tmp/podbus-pr-source.tar.gz .
           DART_BIN="$(readlink -f "$(command -v dart)")"
           DART_SDK_DIR="$(dirname "$(dirname "$DART_BIN")")"
@@ -44,6 +41,11 @@ jobs:
         with:
           name: podbus-pr-source
           path: /tmp/podbus-pr-source.tar.gz
+          retention-days: 1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: podbus-pub-cache
+          path: /tmp/podbus-pub-cache.tar.gz
           retention-days: 1
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
