@@ -45,17 +45,19 @@ final class ReconnectPolicy {
     if (attempt <= 0 || initialDelay == Duration.zero) {
       return Duration.zero;
     }
-    final rawMicros = initialDelay.inMicroseconds *
+    final rawMicros =
+        initialDelay.inMicroseconds *
         math.pow(backoffMultiplier, attempt - 1).toDouble();
-    final cappedMicros = math.min(rawMicros, maxDelay.inMicroseconds.toDouble());
+    final cappedMicros = math.min(
+      rawMicros,
+      maxDelay.inMicroseconds.toDouble(),
+    );
     if (jitter == 0) {
       return Duration(microseconds: cappedMicros.round());
     }
     final source = random ?? math.Random();
     final factor = 1 - jitter + source.nextDouble() * jitter * 2;
-    return Duration(
-      microseconds: math.max(0, (cappedMicros * factor).round()),
-    );
+    return Duration(microseconds: math.max(0, (cappedMicros * factor).round()));
   }
 }
 
@@ -77,8 +79,7 @@ final class ResilientMessageBus implements MessageBus {
     FutureOr<void> Function(Object error, int attempt, Duration delay)?
     onReconnectAttempt,
   }) : _factory = factory,
-       _shouldReconnect =
-           shouldReconnect ?? defaultReconnectErrorPredicate,
+       _shouldReconnect = shouldReconnect ?? defaultReconnectErrorPredicate,
        _onReconnectAttempt = onReconnectAttempt;
 
   final MessageBusFactory _factory;
@@ -125,7 +126,9 @@ final class ResilientMessageBus implements MessageBus {
       final delegate = _delegate;
       _delegate = null;
       if (delegate != null) {
-        await delegate.close(timeout: effectiveTimeout).timeout(effectiveTimeout);
+        await delegate
+            .close(timeout: effectiveTimeout)
+            .timeout(effectiveTimeout);
       }
     } on Object catch (error, stackTrace) {
       failure = error;
@@ -212,6 +215,7 @@ final class ResilientMessageBus implements MessageBus {
     final result = await delegate.healthCheck();
     return HealthCheckResult(
       status: result.status,
+      checkedAt: result.checkedAt,
       message: result.message,
       details: {
         ...result.details,
@@ -224,11 +228,11 @@ final class ResilientMessageBus implements MessageBus {
     );
   }
 
-  Future<R> _execute<R>(Future<R> Function(MessageBus delegate) operation) async {
+  Future<R> _execute<R>(
+    Future<R> Function(MessageBus delegate) operation,
+  ) async {
     if (_closing) {
-      throw const MessagingConnectionException(
-        'Message bus is shutting down.',
-      );
+      throw const MessagingConnectionException('Message bus is shutting down.');
     }
     await connect();
     final recovery = _recovery;
@@ -326,9 +330,7 @@ final class ResilientMessageBus implements MessageBus {
   MessageBus _requireDelegate() {
     final delegate = _delegate;
     if (delegate == null) {
-      throw const MessagingConnectionException(
-        'Message bus is not connected.',
-      );
+      throw const MessagingConnectionException('Message bus is not connected.');
     }
     return delegate;
   }
@@ -348,8 +350,7 @@ final class ResilientDurableJobQueue implements DurableJobQueue {
     FutureOr<void> Function(Object error, int attempt, Duration delay)?
     onReconnectAttempt,
   }) : _factory = factory,
-       _shouldReconnect =
-           shouldReconnect ?? defaultReconnectErrorPredicate,
+       _shouldReconnect = shouldReconnect ?? defaultReconnectErrorPredicate,
        _onReconnectAttempt = onReconnectAttempt;
 
   final DurableJobQueueFactory _factory;
@@ -396,7 +397,9 @@ final class ResilientDurableJobQueue implements DurableJobQueue {
       final delegate = _delegate;
       _delegate = null;
       if (delegate != null) {
-        await delegate.close(timeout: effectiveTimeout).timeout(effectiveTimeout);
+        await delegate
+            .close(timeout: effectiveTimeout)
+            .timeout(effectiveTimeout);
       }
     } on Object catch (error, stackTrace) {
       failure = error;
@@ -482,6 +485,7 @@ final class ResilientDurableJobQueue implements DurableJobQueue {
     final result = await delegate.healthCheck();
     return HealthCheckResult(
       status: result.status,
+      checkedAt: result.checkedAt,
       message: result.message,
       details: {
         ...result.details,

@@ -115,7 +115,10 @@ void main() {
       await Future.wait([first, second]);
 
       expect(factoryCalls, 2);
-      expect(delegates.last.publishedSubjects, containsAll(['events.a', 'events.b']));
+      expect(
+        delegates.last.publishedSubjects,
+        containsAll(['events.a', 'events.b']),
+      );
       await bus.close();
     });
 
@@ -255,10 +258,7 @@ void main() {
 
       expect(delegate.closedWorkers, 1);
       expect(delegate.closed, isTrue);
-      await expectLater(
-        queue.enqueue('jobs.long', 1),
-        completes,
-      );
+      await expectLater(queue.enqueue('jobs.long', 1), completes);
       await queue.close();
     });
   });
