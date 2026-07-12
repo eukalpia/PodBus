@@ -1,4 +1,4 @@
-name: Apply resilience production hardening
+name: Apply broker fault production hardening
 
 on:
   push:
@@ -16,44 +16,82 @@ concurrency:
 
 env:
   DART_SDK: 3.12.0
+  PODBUS_RUN_INTEGRATION_TESTS: "true"
 
 jobs:
   apply-and-validate:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 70
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           ref: beta-resilience-nats-rabbitmq
           fetch-depth: 0
 
-      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260
         with:
           sdk: ${{ env.DART_SDK }}
 
-      - name: Apply resilience implementation
+      - name: Reconstruct and apply broker fault hardening
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          base64 --decode .github/patches/resilience-production.patch.gz.b64 \
-            | gzip --decompress > /tmp/resilience-production.patch
-          git apply --check /tmp/resilience-production.patch
-          git apply /tmp/resilience-production.patch
-          git rm .github/patches/resilience-production.patch.gz.b64
-          git rm .github/workflows/apply-resilience-production.yml
-          git rm .github/workflows/export-pr-source.yml
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import urllib.request
+
+          repository = os.environ['GITHUB_REPOSITORY']
+          token = os.environ['GH_TOKEN']
+          blob_shas = [
+              'ca67c7ebdbcbb4a9a6e9cd0c8743216f3429cb6c',
+              '82a095dd0327ed232aca8dd0e8581db1f6d9ffa1',
+              '46d9490a191805e1db6adf09abc46e68c9a9790e',
+              '1f5043a7311f1c724c8f7a8e9777954dbcc38e4c',
+              '08a338d70e95262a04e394ec781d2900ae64f652',
+              '8640d0fbb8c3ae82ede95d67779032ae9399f581',
+              '08c65555b3ce41850ae06910c1e2ab1f843e2aa3',
+              'fbef42873ae56426391fd1574075cc37dafe8998',
+          ]
+          with open('/tmp/fault-production.patch.gz', 'wb') as output:
+              for sha in blob_shas:
+                  request = urllib.request.Request(
+                      f'https://api.github.com/repos/{repository}/git/blobs/{sha}',
+                      headers={
+                          'Authorization': f'Bearer {token}',
+                          'Accept': 'application/vnd.github+json',
+                          'X-GitHub-Api-Version': '2022-11-28',
+                      },
+                  )
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      payload = json.load(response)
+                  output.write(base64.b64decode(payload['content']))
+          PY
+          gzip --test /tmp/fault-production.patch.gz
+          gzip --decompress --stdout /tmp/fault-production.patch.gz > /tmp/fault-production.patch
+          git apply --check /tmp/fault-production.patch
+          git apply /tmp/fault-production.patch
+          git rm -f .github/patches/fault-production.part* || true
+          git rm -f .github/patches/resilience-production.patch.gz.b64 || true
+          git rm -f .github/workflows/apply-resilience-production.yml || true
+          git rm -f .github/workflows/apply-pr10-resilience.yml || true
+          git rm -f .github/workflows/export-pr-source.yml || true
 
       - name: Resolve dependencies
         run: dart pub get
 
-      - name: Format and analyze
+      - name: Format, analyze, and verify metadata
         run: |
-          dart format .
+          dart format --output=none --set-exit-if-changed .
           git diff --check
           dart analyze .
+          dart run tool/verify_release.dart --check
 
-      - name: Run complete unit suite
+      - name: Run complete non-integration suite
         run: >-
           dart test
           packages/podbus_core/test
@@ -66,6 +104,51 @@ jobs:
           --exclude-tags=integration
           --reporter=expanded
 
+      - name: Start fault-injection brokers
+        run: docker compose -f docker-compose.integration.yaml up -d nats rabbitmq toxiproxy
+
+      - name: Wait for fault-injection services
+        run: |
+          bash tool/ci/wait_for_nats.sh
+          bash tool/ci/wait_for_rabbitmq.sh
+          bash tool/ci/wait_for_toxiproxy.sh
+
+      - name: Run broker-backed fault suite
+        run: >-
+          dart run tool/fault_suite.dart
+          --profile=smoke
+          --report=test-results/fault-suite.json
+
+      - name: Run short soak smoke
+        run: >-
+          dart run tool/soak_resilience.dart
+          --duration=30s
+          --allow-short=true
+          --fault-interval=5s
+          --outage=1s
+          --publish-interval=20ms
+          --report=test-results/soak-summary.json
+
+      - name: Capture diagnostics
+        if: always()
+        run: |
+          mkdir -p test-results
+          docker compose -f docker-compose.integration.yaml logs --no-color > test-results/fault-brokers.log 2>&1 || true
+          docker stats --no-stream > test-results/docker-stats.txt 2>&1 || true
+
+      - name: Upload fault diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: broker-fault-hardening-diagnostics
+          path: test-results
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Stop fault-injection brokers
+        if: always()
+        run: docker compose -f docker-compose.integration.yaml down -v || true
+
       - name: Commit validated implementation
         shell: bash
         run: |
@@ -73,5 +156,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "Harden NATS and RabbitMQ fault recovery"
+          git commit -m "Add broker fault injection and soak production gates"
           git push origin HEAD:beta-resilience-nats-rabbitmq
