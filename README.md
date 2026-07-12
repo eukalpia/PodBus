@@ -3,58 +3,130 @@
 </p>
 
 <p align="center">
-  Messaging and durable jobs for Dart, without flattening every broker into the same abstraction.
+  <strong>Messaging, durable jobs, recovery, and database-backed delivery patterns for Dart.</strong><br />
+  One API where the semantics are genuinely shared. Explicit capabilities where brokers differ.
 </p>
 
 <p align="center">
   <a href="https://github.com/eukalpia/PodBus/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/eukalpia/PodBus/actions/workflows/ci.yml/badge.svg" /></a>
+  <a href="https://github.com/eukalpia/PodBus/actions/workflows/fault-injection.yml"><img alt="Fault injection" src="https://github.com/eukalpia/PodBus/actions/workflows/fault-injection.yml/badge.svg" /></a>
+  <a href="https://github.com/eukalpia/PodBus/actions/workflows/stress.yml"><img alt="Stress" src="https://github.com/eukalpia/PodBus/actions/workflows/stress.yml/badge.svg" /></a>
+  <a href="https://github.com/eukalpia/PodBus/actions/workflows/soak.yml"><img alt="Soak" src="https://github.com/eukalpia/PodBus/actions/workflows/soak.yml/badge.svg" /></a>
   <a href="https://github.com/eukalpia/PodBus/actions/workflows/compatibility.yml"><img alt="Compatibility" src="https://github.com/eukalpia/PodBus/actions/workflows/compatibility.yml/badge.svg" /></a>
   <a href="https://github.com/eukalpia/PodBus/actions/workflows/security.yml"><img alt="Security" src="https://github.com/eukalpia/PodBus/actions/workflows/security.yml/badge.svg" /></a>
   <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" /></a>
   <img alt="Dart SDK" src="https://img.shields.io/badge/Dart-%5E3.12.0-0175C2?logo=dart" />
-  <img alt="Status" src="https://img.shields.io/badge/status-alpha-orange" />
+  <img alt="Status" src="https://img.shields.io/badge/status-beta%20candidate-F59E0B" />
 </p>
 
-PodBus is a Dart toolkit for message-driven services. It provides a common API for publish/subscribe, request/reply, durable workers, retries, dead letters, typed payloads, health checks, and Serverpod integration.
+PodBus is a framework-neutral Dart workspace for event-driven services. It provides publish/subscribe, request/reply, durable workers, retries, dead-letter routing, typed envelopes, bounded concurrency, reconnect supervision, health reporting, tracing, PostgreSQL outbox/inbox patterns, and optional Serverpod lifecycle integration.
 
-The abstraction stops where broker semantics diverge. Applications can inspect transport capabilities at startup instead of discovering an unsupported guarantee after deployment.
-
-PodBus is not a broker. It runs on top of NATS, RabbitMQ, Kafka, and PostgreSQL-backed reliability primitives.
+PodBus is **not a broker**. It runs on top of NATS, JetStream, RabbitMQ, Kafka, and PostgreSQL reliability primitives. It does not pretend those systems have identical guarantees.
 
 > [!IMPORTANT]
-> PodBus is currently `0.1.0-alpha.1`. NATS Core and JetStream are the reference transports. RabbitMQ is suitable for controlled production evaluation. Kafka is experimental. Public APIs may still change before the first stable release.
+> The workspace version is currently `0.1.0-alpha.1`. The repository is undergoing evidence-based beta qualification. NATS Core and JetStream are the reference transports. RabbitMQ is a beta candidate. Kafka remains experimental. Public APIs can still change before a tagged beta.
 
-## What is included
+> [!WARNING]
+> PodBus does not claim exactly-once business side effects. Durable processing is at-least-once. Reconnects, consumer restarts, acknowledgement expiry, and ambiguous publish outcomes can produce duplicates. Use an inbox, idempotency key, or domain uniqueness constraint around externally visible effects.
 
-- NATS Core publish/subscribe and request/reply
-- NATS JetStream durable workers
-- RabbitMQ publisher confirms, mandatory routing, retries, and dead-letter queues
-- Experimental Kafka producers and consumer groups through native `librdkafka` bindings
-- Typed JSON codecs with explicit message types and schema versions
-- PostgreSQL transactional outbox, inbox leases, and persistent idempotency
-- W3C trace-context propagation, Prometheus metrics, structured logs, and health probes
-- Serverpod lifecycle and per-message session helpers
-- Bounded concurrency, payload limits, graceful shutdown, and transport health reporting
+## Why PodBus exists
+
+A typical backend starts with one broker and eventually accumulates several delivery mechanisms:
+
+- low-latency events and request/reply through NATS Core;
+- durable jobs through JetStream or RabbitMQ;
+- append-only streams through Kafka;
+- transactional database publication through an outbox;
+- retries, dead letters, tracing, health checks, and graceful shutdown implemented differently in every service.
+
+PodBus centralizes the shared application contract without erasing the transport contract. Applications can inspect capabilities at startup and fail fast when a selected adapter cannot provide a required behavior.
+
+```dart
+queue.capabilities.requireAll({
+  MessagingCapability.durableJobs,
+  MessagingCapability.deadLettering,
+  MessagingCapability.gracefulShutdown,
+});
+```
+
+## Architecture
+
+```mermaid
+flowchart LR
+  APP[Application code] --> CORE[podbus_core]
+  CORE --> NATS[podbus_nats]
+  CORE --> RMQ[podbus_rabbitmq]
+  CORE --> KAFKA[podbus_kafka]
+  APP --> PG[podbus_postgres]
+  APP --> OBS[podbus_observability]
+  APP --> SP[podbus_serverpod]
+
+  NATS --> NC[NATS Core]
+  NATS --> JS[JetStream]
+  RMQ --> RABBIT[RabbitMQ]
+  KAFKA --> K[Kafka / librdkafka]
+  PG --> POSTGRES[(PostgreSQL)]
+  OBS --> OTEL[Trace context / metrics / logs]
+  SP --> SERVERPOD[Serverpod sessions]
+```
+
+The workspace is intentionally split so a plain Dart process does not need Serverpod, PostgreSQL, Prometheus, or Kafka unless it chooses them.
+
+## Package map
+
+| Package | Responsibility | Maturity |
+| --- | --- | --- |
+| `podbus_core` | Contracts, envelopes, codecs, policies, limits, in-memory implementations, reconnect supervision | beta candidate |
+| `podbus_nats` | NATS Core events/request-reply and JetStream durable workers | reference |
+| `podbus_rabbitmq` | Publisher confirms, routing, durable queues, retries, DLQ, channel-failure propagation | beta candidate |
+| `podbus_kafka` | Producers, consumer groups, offset ordering, native `librdkafka` bindings | experimental |
+| `podbus_postgres` | Transactional outbox, inbox leases, persistent idempotency | production evaluation |
+| `podbus_observability` | Trace propagation, spans, Prometheus registry, structured logs, health aggregation | production evaluation |
+| `podbus_serverpod` | Serverpod startup/shutdown and per-message sessions | production evaluation |
+
+## Transport capability matrix
+
+| Capability | In-memory | NATS Core | NATS JetStream | RabbitMQ | Kafka |
+| --- | :---: | :---: | :---: | :---: | :---: |
+| Publish / subscribe | ✓ | ✓ | — | ✓ | ✓ |
+| Queue groups | ✓ | ✓ | — | ✓ | consumer groups |
+| Request / reply | ✓ | ✓ | — | — | — |
+| Durable workers | test only | — | ✓ | ✓ | ✓ |
+| Delayed retry | process-local | — | broker NAK | TTL / DLX | — |
+| Dead-letter handling | ✓ | — | ✓ | ✓ | ✓ |
+| Manual acknowledgement / commit | — | — | ✓ | ✓ | ✓ |
+| Publisher confirmation | in-process | flush-level | JetStream PubAck | AMQP confirm | delivery report |
+| Typed codec registry | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Automatic delegate recreation | ✓ | ✓ | ✓ | ✓ | experimental |
+| Current status | development | reference | reference | beta candidate | experimental |
+
+### Practical selection guide
+
+- **NATS Core**: low-latency events, queue groups, and request/reply where persistence is not required.
+- **NATS JetStream**: durable workers, explicit consumer state, acknowledgement windows, redelivery, and lightweight broker topology.
+- **RabbitMQ**: queue-oriented workloads, routing, publisher confirms, prefetch, TTL/DLX retry topology, and broker-managed dead letters.
+- **Kafka**: append-only event streams and consumer groups where partition and offset semantics are central. The current PodBus adapter remains experimental.
+- **PostgreSQL outbox**: atomic business-data change plus later broker publication.
 
 ## Quick start
 
-The packages are not published to pub.dev yet. The example below tracks `main`; pin a commit in any project where reproducible builds matter.
+Packages are not published to pub.dev yet. Pin a commit for reproducible builds.
 
 ```yaml
 dependencies:
   podbus_core:
     git:
       url: https://github.com/eukalpia/PodBus.git
-      ref: main
+      ref: <commit-sha>
       path: packages/podbus_core
   podbus_nats:
     git:
       url: https://github.com/eukalpia/PodBus.git
-      ref: main
+      ref: <commit-sha>
       path: packages/podbus_nats
 ```
 
-Start NATS with JetStream enabled:
+Start NATS with JetStream:
 
 ```bash
 docker run --rm \
@@ -63,7 +135,7 @@ docker run --rm \
   nats:2.10 -js -m 8222
 ```
 
-Publish an event and consume it through a queue group:
+Publish and consume an event:
 
 ```dart
 import 'package:podbus_core/podbus_core.dart';
@@ -100,7 +172,7 @@ Future<void> main() async {
 
 ## Durable jobs
 
-JetStream and RabbitMQ implement the `DurableJobQueue` contract. A worker acknowledges a job only after the handler completes successfully.
+JetStream and RabbitMQ implement `DurableJobQueue`. A source delivery is acknowledged only after successful handling, or after a retry/dead-letter publication has received the transport's confirmation.
 
 ```dart
 final jobs = NatsJetStreamJobQueue(
@@ -110,13 +182,18 @@ final jobs = NatsJetStreamJobQueue(
       enabled: true,
       streamName: 'PODBUS_JOBS',
       subjects: ['jobs.>'],
+      consumerConfig: NatsJetStreamConsumerConfig(
+        ackWait: Duration(seconds: 30),
+        maxDeliver: 10,
+        maxAckPending: 2048,
+      ),
     ),
   ),
 );
 
 await jobs.connect();
 
-await jobs.worker<Map<String, Object?>>(
+final worker = await jobs.worker<Map<String, Object?>>(
   'jobs.email.welcome',
   durableName: 'welcome-email-v1',
   concurrency: 8,
@@ -144,62 +221,77 @@ await jobs.enqueue(
 );
 ```
 
-Retries and dead-letter publication complete before the source message is acknowledged, terminated, or committed. That protects delivery state; it does not make an arbitrary business side effect exactly-once.
+For long-running JetStream handlers, PodBus can send `inProgress` heartbeats so the broker does not redeliver healthy work merely because the handler exceeds the original acknowledgement window.
 
-## Choosing a transport
+## Reconnect supervision
 
-| Capability | In-memory | NATS Core | NATS JetStream | RabbitMQ | Kafka |
-| --- | :---: | :---: | :---: | :---: | :---: |
-| Publish / subscribe | ✓ | ✓ | — | ✓ | ✓ |
-| Queue groups | ✓ | ✓ | — | ✓ | consumer groups |
-| Request / reply | ✓ | ✓ | — | — | — |
-| Durable workers | test only | — | ✓ | ✓ | ✓ |
-| Delayed retry | process local | — | broker NAK | TTL / DLX | — |
-| Dead-letter handling | ✓ | — | ✓ | ✓ | ✓ |
-| Manual acknowledgement or commit | — | — | ✓ | ✓ | ✓ |
-| Typed codec registry | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Maturity | development | reference | reference | beta | experimental |
-
-Use `capabilities` as the runtime source of truth:
+`ResilientMessageBus` and `ResilientDurableJobQueue` recreate failed transport clients and restore active subscriptions or workers. The wrapper is framework-neutral and can be used by Serverpod, shelf, CLI daemons, isolates, or a plain `dart:io` process.
 
 ```dart
-queue.capabilities.requireAll({
-  MessagingCapability.durableJobs,
-  MessagingCapability.deadLettering,
-  MessagingCapability.gracefulShutdown,
-});
+final jobs = ResilientDurableJobQueue(
+  factory: () => NatsJetStreamJobQueue(
+    config: natsConfig,
+    fetchBatchSize: 64,
+  ),
+  policy: const ReconnectPolicy(
+    maxAttempts: 12,
+    initialDelay: Duration(milliseconds: 100),
+    maxDelay: Duration(seconds: 5),
+    backoffMultiplier: 2,
+    jitter: 0.2,
+    recoveryTimeout: Duration(seconds: 30),
+    disposeTimeout: Duration(seconds: 2),
+    healthCheckInterval: Duration(seconds: 2),
+    healthCheckTimeout: Duration(milliseconds: 750),
+  ),
+);
 ```
 
-A practical rule of thumb:
+Recovery behavior:
 
-- **NATS Core** for low-latency events and request/reply where broker persistence is not required.
-- **NATS JetStream** for durable work with explicit consumer state and redelivery.
-- **RabbitMQ** for queue-oriented workloads, routing, publisher confirms, and broker-managed retry topology.
-- **Kafka** for append-only event streams and consumer groups, while accepting that the current adapter is still experimental.
+1. classify the failure as reconnectable or application-level;
+2. coalesce concurrent recovery requests;
+3. mark health as degraded;
+4. bound disposal of the unhealthy delegate;
+5. create and connect a replacement;
+6. restore active subscriptions or workers;
+7. retry the failed operation once;
+8. expose the last recovery error and recovery timestamp through health details.
 
-## Delivery and consistency
+A recovery timeout invalidates the stale recovery future so later operations are not permanently blocked by an abandoned reconnect attempt.
 
-PodBus uses **at-least-once delivery** for broker-backed workers. Duplicate delivery is expected during failures, reconnects, lease expiry, and consumer restarts.
+## Delivery contract
 
-| Concern | PodBus behavior |
+| Event | PodBus behavior |
 | --- | --- |
-| Handler success | acknowledge or commit after the handler returns |
-| Handler failure | classify, retry, or dead-letter according to policy |
-| Duplicate delivery | application-level idempotency or a shared inbox store |
-| Database write plus publish | PostgreSQL transactional outbox |
-| Ordering | determined by the selected broker and partitioning strategy |
-| Exactly-once side effects | not claimed |
+| Handler returns successfully | acknowledge or commit the source delivery |
+| Handler throws a transient failure | publish/schedule retry, confirm it, then settle the source |
+| Handler throws a permanent failure | publish to dead letter, confirm it, then settle the source |
+| Retry or DLQ confirmation is ambiguous | leave the source unsettled so the broker can redeliver |
+| Connection fails during publish | surface ambiguity or recover according to adapter contract |
+| Consumer dies before acknowledgement | broker redelivery is expected |
+| Acknowledgement window expires | redelivery is expected unless heartbeat extension succeeds |
+| Duplicate delivery | application must deduplicate externally visible effects |
+| Database write plus publish | use the PostgreSQL transactional outbox |
+| Exactly-once external side effects | not claimed |
 
-For business operations, treat idempotency keys, durable consumer names, and message schemas as persistent data contracts rather than implementation details.
+### Idempotency is a data boundary
 
-## Transactional outbox and inbox
+A process-local `Set` is not an idempotency strategy for a replicated service. Use one or more of:
 
-A database transaction followed by a broker publish is not atomic. `podbus_postgres` records the business change and outgoing message in the same PostgreSQL transaction.
+- PostgreSQL inbox leases;
+- persistent idempotency keys;
+- a domain uniqueness constraint;
+- an upstream provider idempotency token;
+- a state transition that is safe to repeat.
+
+## Transactional outbox, inbox, and idempotency
+
+A database commit followed by a broker publish is not atomic. `podbus_postgres` records the business change and outgoing message in one PostgreSQL transaction, then relays the message with leases and `FOR UPDATE SKIP LOCKED`.
 
 ```dart
 final pool = Pool<void>.withUrl(databaseUrl);
 final outbox = PostgresOutbox(pool);
-
 await outbox.install();
 
 await pool.runTx((transaction) async {
@@ -215,13 +307,13 @@ await pool.runTx((transaction) async {
 });
 ```
 
-`PostgresOutboxRelay` publishes pending records with leases and `FOR UPDATE SKIP LOCKED`, allowing multiple relay replicas to share the same table. `PostgresInbox` and `PostgresIdempotencyStore` provide a shared deduplication boundary for consumers.
+`PostgresInbox` prevents multiple replicas from performing the same guarded side effect concurrently. `PostgresIdempotencyStore` persists completed operation results across restarts.
 
 See [Reliability](docs/reliability.md) for the full failure model.
 
-## Typed messages
+## Typed wire contracts
 
-The codec registry keeps Dart types separate from stable wire names:
+Dart class names are not stable protocol identifiers. PodBus codecs register explicit wire names and schema versions.
 
 ```dart
 final codecs = MessageCodecRegistry()
@@ -229,36 +321,30 @@ final codecs = MessageCodecRegistry()
     messageType: 'crm.lead-created',
     schemaVersion: 2,
     encode: (event) => event.toJson(),
-    decode: (json, version) {
-      return LeadCreated.fromJson(
-        json! as Map<String, Object?>,
-        schemaVersion: version,
-      );
-    },
+    decode: (json, version) => LeadCreated.fromJson(
+      json! as Map<String, Object?>,
+      schemaVersion: version,
+    ),
   );
 ```
 
-The envelope carries `messageType` and `schemaVersion`. Consumers receive the incoming version and can upcast older payloads deliberately. Unknown future versions are rejected rather than guessed.
+Consumers receive the incoming version and can upcast old payloads deliberately. Unknown future versions are rejected rather than guessed.
 
-## Observability
+## Observability and health
 
-`podbus_observability` is deliberately framework-neutral. It provides:
+`podbus_observability` provides:
 
-- W3C `traceparent` and `tracestate` propagation
-- producer, consumer, request, and worker spans
-- a bounded-cardinality Prometheus registry
-- JSON logs with credential and personal-data redaction
-- readiness and liveness aggregation
+- W3C `traceparent` and `tracestate` propagation;
+- producer, consumer, request, and durable-worker spans;
+- bounded-cardinality Prometheus metrics;
+- structured JSON logs with credential and personal-data redaction;
+- readiness/liveness aggregation;
+- degraded recovery states.
 
 ```dart
 final metrics = PrometheusRegistry(maxSeries: 2000);
 final logs = JsonMessagingLogSink(write: stdout.writeln);
 final tracer = PodBusTracer(export: spanExporter.add);
-
-final config = MessagingConfig(
-  metricHook: metrics.hook,
-  logHook: logs.hook,
-);
 
 final tracedBus = InstrumentedMessageBus(
   delegate: bus,
@@ -267,11 +353,26 @@ final tracedBus = InstrumentedMessageBus(
 );
 ```
 
-Message IDs, tenant IDs, email addresses, and arbitrary routing keys should not be Prometheus labels. The registry uses an allow-list and a hard series limit because an observability layer should not become the next outage.
+Do not use message IDs, tenant IDs, emails, or arbitrary routing keys as Prometheus labels. The registry applies an allow-list and a hard series limit because observability should not become the next outage.
 
-## Serverpod
+## Plain Dart deployment
 
-`podbus_serverpod` opens a fresh Serverpod session for each message and closes it after the handler finishes. Startup is failure-atomic: if registration fails, already-opened transports are closed.
+The repository contains a framework-neutral process proof in `examples/plain_dart_service`:
+
+```bash
+docker compose -f docker-compose.integration.yaml up -d nats
+bash tool/ci/wait_for_nats.sh
+
+dart run examples/plain_dart_service/bin/main.dart
+# Separate process:
+dart run examples/plain_dart_service/bin/probe.dart
+```
+
+The probe publishes through an independent PodBus client, verifies the worker side effect through HTTP, requests graceful shutdown, and requires the service process to exit successfully.
+
+## Serverpod integration
+
+`podbus_serverpod` opens a fresh Serverpod session for each message and closes it after the handler finishes. Startup is failure-atomic: when registration fails, already-opened transports are closed.
 
 ```dart
 final messaging = ServerpodMessaging<Session>(
@@ -284,21 +385,147 @@ final messaging = ServerpodMessaging<Session>(
 await messaging.start();
 ```
 
-## Packages
+## Reliability qualification
 
-| Package | Responsibility |
+PodBus does not award itself production labels because unit tests are green. Beta qualification is built from independent layers.
+
+### Deterministic gates
+
+- formatting and static analysis on Dart `3.12.0` and current stable;
+- complete unit suite with a coverage floor;
+- independent NATS, RabbitMQ, Kafka, and PostgreSQL integration jobs;
+- compatibility, CodeQL, dependency review, and secret scanning;
+- plain Dart process deployment;
+- release metadata and version consistency checks.
+
+### Broker fault matrix
+
+Each scenario runs in a fresh Docker environment with NATS, RabbitMQ, and Toxiproxy. Every scenario has its own runner, machine-readable JSON report, stdout/stderr log, broker logs, container state, and a four-minute watchdog.
+
+| Scenario | What it proves |
 | --- | --- |
-| `podbus_core` | Contracts, codecs, policies, limits, in-memory implementations |
-| `podbus_nats` | NATS Core and JetStream adapters |
-| `podbus_rabbitmq` | RabbitMQ messaging and durable workers |
-| `podbus_kafka` | Experimental Kafka adapter and native `librdkafka` bindings |
-| `podbus_postgres` | Transactional outbox, inbox leases, persistent idempotency |
-| `podbus_observability` | Tracing, Prometheus metrics, JSON logs, health probes |
-| `podbus_serverpod` | Serverpod lifecycle and session integration |
+| NATS TCP partition | client recreation, worker restoration, post-recovery delivery |
+| RabbitMQ TCP partition | connection recovery, topology restoration, confirmed publication |
+| RabbitMQ channel failures | publisher and consumer channel faults propagate to supervision |
+| NATS crash before ack | process death produces broker redelivery |
+| RabbitMQ crash before ack | unacknowledged delivery is requeued/redelivered |
+| Multiple replicas | competing workers share work without broadcast duplication |
+| NATS stop before confirm | ambiguous publish does not become a false success |
+| RabbitMQ stop before confirm | publisher confirmation failure is surfaced |
+| NATS shutdown during DLQ ack | shutdown does not silently lose pending failure settlement |
+| RabbitMQ shutdown during retry confirm | source is not acked before retry confirmation |
+| RabbitMQ shutdown during DLQ confirm | source is not acked before DLQ confirmation |
+| Slow consumers | configured concurrency remains bounded under burst load |
 
-## Production guidance
+### Large stress matrix
 
-The repository includes operational material alongside the library:
+The mandatory beta-candidate profile requests **3,250,000 messages** across NATS Core, JetStream, and RabbitMQ:
+
+| Scenario | Messages | Mode | Publishers | Consumers |
+| --- | ---: | --- | ---: | ---: |
+| NATS Core | 1,000,000 | fast event path | 128 | 16 |
+| JetStream | 250,000 | durable | 64 | 8 |
+| JetStream | 250,000 | worker | 64 | 16 |
+| RabbitMQ | 1,000,000 | fast event path | 128 | 16 |
+| RabbitMQ | 500,000 | durable | 64 | 8 |
+| RabbitMQ | 250,000 | worker | 64 | 16 |
+
+Event benchmarks isolate publisher and subscriber connections. Durable benchmarks start workers before enqueue and measure enqueue plus confirmed end-to-end delivery. Kafka stress runs separately and remains non-blocking experimental evidence.
+
+### One-hour soak
+
+The soak continuously publishes to JetStream and RabbitMQ while alternating TCP partitions and broker restarts. It records:
+
+- acknowledged enqueues;
+- total and unique deliveries;
+- duplicates and redeliveries;
+- missing acknowledged messages;
+- delegate recreation counts;
+- recovery-latency percentiles;
+- RSS growth;
+- every injected fault and unexpected error.
+
+The mandatory condition is `missing acknowledged messages = 0` after the drain period.
+
+<!-- QUALIFICATION_RESULTS_START -->
+### Current evidence
+
+The final beta-candidate qualification is in progress. This section is intentionally not populated from partial or skipped workflow runs. Exact results will be copied from retained JSON/Markdown artifacts after the mandatory fault, stress, and one-hour soak jobs complete for one candidate revision.
+<!-- QUALIFICATION_RESULTS_END -->
+
+## Running qualification locally
+
+Start deterministic broker state:
+
+```bash
+bash tool/ci/start_integration_services.sh nats rabbitmq toxiproxy
+bash tool/ci/wait_for_nats.sh
+bash tool/ci/wait_for_rabbitmq.sh
+bash tool/ci/wait_for_toxiproxy.sh
+```
+
+Run fault scenarios:
+
+```bash
+dart run tool/fault_suite.dart --profile=smoke
+dart run tool/fault_suite.dart --profile=full
+
+dart run tool/fault_suite.dart \
+  --profile=smoke \
+  --scenario=nats-tcp-partition \
+  --report=test-results/nats-partition.json
+```
+
+Run the configurable stress harness:
+
+```bash
+PODBUS_STRESS_MESSAGES=1000000 \
+PODBUS_STRESS_MODES=fast \
+PODBUS_STRESS_TRANSPORTS=nats \
+PODBUS_STRESS_PAYLOAD_SIZES=256 \
+PODBUS_STRESS_CONSUMERS=16 \
+PODBUS_STRESS_PRODUCERS=128 \
+dart run tool/stress_transports.dart
+```
+
+Run soak qualification:
+
+```bash
+# Required beta evidence
+dart run tool/soak_resilience.dart --duration=1h
+
+# Dedicated host
+dart run tool/soak_resilience.dart --duration=6h
+dart run tool/soak_resilience.dart --duration=24h
+
+# Harness smoke only
+dart run tool/soak_resilience.dart \
+  --duration=2m \
+  --allow-short=true \
+  --fault-interval=5s
+```
+
+## Operational checklist
+
+Before deploying a PodBus worker:
+
+- [ ] Require the capabilities the application depends on.
+- [ ] Give every durable consumer a stable, environment-specific name.
+- [ ] Make externally visible side effects idempotent.
+- [ ] Use a transactional outbox for database-write-plus-publish flows.
+- [ ] Configure payload and header limits.
+- [ ] Bound handler concurrency and broker prefetch/ack pending.
+- [ ] Choose acknowledgement windows based on real handler duration.
+- [ ] Enable JetStream heartbeats for long-running work.
+- [ ] Configure retries, dead-letter destinations, and alerting.
+- [ ] Expose readiness, liveness, and degraded recovery state.
+- [ ] Drain workers before process termination.
+- [ ] Retain broker logs and failure reports during incidents.
+- [ ] Test broker restart, network partition, and consumer death in staging.
+
+## Kubernetes and operations
+
+The repository includes:
 
 - [Production deployment](docs/production.md)
 - [Incident runbook](docs/runbook.md)
@@ -326,10 +553,10 @@ dart test \
   --exclude-tags=integration
 ```
 
-Run broker-backed tests locally:
+Broker-backed suites:
 
 ```bash
-docker compose -f docker-compose.integration.yaml up -d nats rabbitmq kafka postgres
+bash tool/ci/start_integration_services.sh nats rabbitmq kafka postgres
 
 PODBUS_RUN_INTEGRATION_TESTS=true dart test \
   packages/podbus_nats/test \
@@ -339,27 +566,44 @@ PODBUS_RUN_INTEGRATION_TESTS=true dart test \
   --tags=integration
 ```
 
-Benchmarks in distributed systems are configuration-dependent. The stress tools in `tool/` are intended for regression detection and capacity work on a documented environment, not for claiming one universal messages-per-second number.
+## Benchmark interpretation
 
-## Project status
+Distributed-system throughput is a property of the complete environment: broker version, persistence mode, acknowledgement policy, payload size, partitions/queues, prefetch, batching, disk, network, CPU, and handler behavior.
 
-Before the first stable release, the work is focused on:
+PodBus publishes machine metadata and exact scenario configuration with stress artifacts. Results are useful for regression detection and capacity planning. They are not a universal claim that one broker is always faster than another.
 
-- long-running fault and soak tests across supported broker versions
-- stable Kafka rebalance and delivery-report behavior
-- compatibility fixtures for wire-schema evolution
-- independent production evaluations
-- package publication after the API surface settles
+## Known limitations
 
-A `1.0.0` release will mean a documented compatibility policy and a stable public API. It will not mean exactly-once delivery across arbitrary external side effects.
+- the workspace has not yet published packages to pub.dev;
+- public APIs may change before the tagged beta;
+- Kafka delivery-report and rebalance behavior is still experimental;
+- cross-broker ordering is not normalized;
+- retries can reorder work;
+- exactly-once external side effects are not provided;
+- a single GitHub-hosted soak is evidence, not a substitute for repeated production-like staging runs;
+- users must validate broker versions, storage, TLS, authentication, and topology under their own workload.
+
+## Roadmap to `1.0.0`
+
+A stable release requires:
+
+1. a tagged beta with published compatibility rules;
+2. repeated nightly fault and soak evidence;
+3. wire-schema compatibility fixtures;
+4. Kafka rebalance and delivery-report contracts proven across supported `librdkafka` versions;
+5. independent real-world deployments;
+6. package publication and upgrade documentation;
+7. a stable public API policy.
+
+`1.0.0` will mean a documented compatibility contract. It will not mean magic exactly-once behavior across arbitrary databases, HTTP APIs, payment providers, or email systems.
 
 ## Contributing
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Changes to delivery semantics, wire formats, or durable consumer behavior should include failure-oriented tests, not only happy-path coverage.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Changes to delivery semantics, wire formats, reconnect behavior, or durable consumers should include failure-oriented tests, not only happy-path coverage.
 
 ## Security
 
-Report vulnerabilities through the process described in [SECURITY.md](SECURITY.md). Do not disclose security issues in a public GitHub issue.
+Report vulnerabilities through [SECURITY.md](SECURITY.md). Do not disclose security issues in a public issue.
 
 ## License
 
