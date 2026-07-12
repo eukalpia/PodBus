@@ -17,8 +17,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: fault-injection-${{ github.ref }}
-  cancel-in-progress: false
+  group: podbus-broker-fault-qualification
+  cancel-in-progress: true
 
 env:
   DART_SDK: 3.12.0
@@ -56,7 +56,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       max-parallel: 3
@@ -89,11 +89,45 @@ jobs:
           bash tool/ci/wait_for_rabbitmq.sh
           bash tool/ci/wait_for_toxiproxy.sh
       - name: Run isolated broker fault scenario
-        run: >-
-          dart run tool/fault_suite.dart
-          --profile=${PROFILE}
-          --scenario=${{ matrix.scenario }}
-          --report=test-results/fault-${{ matrix.scenario }}.json
+        shell: bash
+        env:
+          SCENARIO: ${{ matrix.scenario }}
+        run: |
+          set -uo pipefail
+          mkdir -p test-results
+          report="test-results/fault-${SCENARIO}.json"
+          log="test-results/fault-${SCENARIO}.log"
+          set +e
+          timeout --foreground --kill-after=15s 4m \
+            dart run tool/fault_suite.dart \
+              --profile="${PROFILE}" \
+              --scenario="${SCENARIO}" \
+              --report="${report}" \
+            2>&1 | tee "${log}"
+          status=${PIPESTATUS[0]}
+          set -e
+          if [[ $status -eq 124 || $status -eq 137 ]]; then
+            python3 - "$report" "$SCENARIO" "$status" <<'PY'
+          import json
+          import pathlib
+          import sys
+          from datetime import datetime, timezone
+
+          path = pathlib.Path(sys.argv[1])
+          path.write_text(json.dumps({
+              "profile": "smoke",
+              "generatedAt": datetime.now(timezone.utc).isoformat(),
+              "success": False,
+              "results": [{
+                  "name": sys.argv[2],
+                  "success": False,
+                  "error": f"scenario watchdog terminated process with status {sys.argv[3]}",
+              }],
+          }, indent=2))
+          PY
+            echo "Scenario ${SCENARIO} exceeded the four-minute watchdog." >&2
+          fi
+          exit "$status"
       - name: Capture broker logs
         if: always()
         shell: bash
