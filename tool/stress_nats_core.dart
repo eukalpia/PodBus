@@ -69,8 +69,18 @@ Future<void> main() async {
       );
     }
 
-    // Keep subscription readiness outside the measured interval.
-    await Future<void>.delayed(const Duration(milliseconds: 250));
+    final readiness = await Future.wait([
+      for (final subscriber in subscribers) subscriber.healthCheck(),
+    ]);
+    final unhealthy = readiness.where(
+      (result) => result.status == HealthStatus.unhealthy,
+    );
+    if (unhealthy.isNotEmpty) {
+      throw StateError(
+        'NATS subscriptions did not become ready: '
+        '${unhealthy.map((result) => result.message).join('; ')}',
+      );
+    }
 
     final stopwatch = Stopwatch()..start();
     var nextIndex = 0;
