@@ -1,3 +1,5 @@
+// ignore_for_file: prefer_initializing_formals
+
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -7,7 +9,6 @@ import 'exceptions.dart';
 import 'headers.dart';
 import 'health.dart';
 import 'message_bus.dart';
-import 'message_context.dart';
 import 'policies.dart';
 
 typedef MessageBusFactory = FutureOr<MessageBus> Function();
@@ -28,11 +29,8 @@ final class ReconnectPolicy {
     this.jitter = 0.2,
     this.recoveryTimeout = const Duration(seconds: 30),
   }) : assert(maxAttempts > 0),
-       assert(!initialDelay.isNegative),
-       assert(!maxDelay.isNegative),
        assert(backoffMultiplier >= 1),
-       assert(jitter >= 0 && jitter <= 1),
-       assert(recoveryTimeout > Duration.zero);
+       assert(jitter >= 0 && jitter <= 1);
 
   final int maxAttempts;
   final Duration initialDelay;

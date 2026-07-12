@@ -265,10 +265,9 @@ void main() {
 }
 
 final class _FakeMessageBus implements MessageBus {
-  _FakeMessageBus({this.connectGate, this.connectError});
+  _FakeMessageBus({this.connectGate});
 
   final Future<void>? connectGate;
-  final Object? connectError;
   final List<String> publishedSubjects = [];
   final List<_FakeSubscription> subscriptions = [];
   bool failNextPublish = false;
@@ -290,7 +289,6 @@ final class _FakeMessageBus implements MessageBus {
   @override
   Future<void> connect() async {
     await connectGate;
-    if (connectError case final error?) throw error;
     connected = true;
   }
 

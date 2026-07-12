@@ -25,11 +25,9 @@ void main() {
         ),
         handler: (_, _) async => throw StateError('temporary'),
       );
-      final delivery = _Delivery(
-        'jobs.retry',
-        {'id': 1},
-        events: adapter.events,
-      );
+      final delivery = _Delivery('jobs.retry', {
+        'id': 1,
+      }, events: adapter.events);
       adapter.consumer.add(delivery);
 
       await _waitFor(() => adapter.publishAttempts == 1);
@@ -42,34 +40,39 @@ void main() {
       await bus.close();
     });
 
-    test('failed retry publish leaves source unacked and degrades health', () async {
-      final adapter = _Adapter()
-        ..publishError = const MessagingConnectionException('connection lost');
-      final bus = RabbitMqMessageBus(config: _config(), adapter: adapter);
-      await bus.connect();
+    test(
+      'failed retry publish leaves source unacked and degrades health',
+      () async {
+        final adapter = _Adapter()
+          ..publishError = const MessagingConnectionException(
+            'connection lost',
+          );
+        final bus = RabbitMqMessageBus(config: _config(), adapter: adapter);
+        await bus.connect();
 
-      final worker = await bus.worker<Map<String, Object?>>(
-        'jobs.retry-fail',
-        durableName: 'retry-fail-v1',
-        retryPolicy: RetryPolicy(
-          maxAttempts: 3,
-          initialDelay: Duration.zero,
-          maxDelay: Duration.zero,
-        ),
-        handler: (_, _) async => throw StateError('temporary'),
-      );
-      final delivery = _Delivery('jobs.retry-fail', {'id': 1});
-      adapter.consumer.add(delivery);
+        final worker = await bus.worker<Map<String, Object?>>(
+          'jobs.retry-fail',
+          durableName: 'retry-fail-v1',
+          retryPolicy: RetryPolicy(
+            maxAttempts: 3,
+            initialDelay: Duration.zero,
+            maxDelay: Duration.zero,
+          ),
+          handler: (_, _) async => throw StateError('temporary'),
+        );
+        final delivery = _Delivery('jobs.retry-fail', {'id': 1});
+        adapter.consumer.add(delivery);
 
-      await _waitFor(() => adapter.publishAttempts == 1);
-      expect(delivery.ackCalls, 0);
-      expect(delivery.nackCalls, 0);
-      expect((await bus.healthCheck()).status, HealthStatus.unhealthy);
+        await _waitFor(() => adapter.publishAttempts == 1);
+        expect(delivery.ackCalls, 0);
+        expect(delivery.nackCalls, 0);
+        expect((await bus.healthCheck()).status, HealthStatus.unhealthy);
 
-      adapter.publishError = null;
-      await worker.close();
-      await bus.close();
-    });
+        adapter.publishError = null;
+        await worker.close();
+        await bus.close();
+      },
+    );
 
     test('dead-letter publish is confirmed before source ack', () async {
       final adapter = _Adapter();
@@ -94,11 +97,9 @@ void main() {
         ),
         handler: (_, _) async => throw StateError('permanent'),
       );
-      final delivery = _Delivery(
-        'jobs.dead',
-        {'id': 2},
-        events: adapter.events,
-      );
+      final delivery = _Delivery('jobs.dead', {
+        'id': 2,
+      }, events: adapter.events);
       adapter.consumer.add(delivery);
 
       await _waitFor(() => adapter.publishAttempts == 1);
@@ -108,7 +109,8 @@ void main() {
       expect(adapter.lastPublish?.exchange, 'podbus.dead');
       expect(adapter.lastPublish?.bytes, isEmpty);
       expect(
-        adapter.lastPublish?.headers[PodBusWireHeaders.deadLetterPayloadOmitted],
+        adapter.lastPublish?.headers[PodBusWireHeaders
+            .deadLetterPayloadOmitted],
         'true',
       );
 
@@ -191,12 +193,15 @@ void main() {
         adapter.consumer.add(delivery);
       }
       await started.future.timeout(_timeout);
+      // Allow the asynchronous consumer stream to place deliveries into the
+      // worker's pending queue before shutdown begins.
+      await Future<void>.delayed(const Duration(milliseconds: 25));
 
       var closed = false;
       final close = bus.close().then((_) => closed = true);
       await Future<void>.delayed(const Duration(milliseconds: 30));
       expect(closed, isFalse);
-      expect(buffered.every((delivery) => delivery.requeued), isTrue);
+      await _waitFor(() => buffered.every((delivery) => delivery.requeued));
       release.complete();
       await close.timeout(_timeout);
       expect(active.ackCalls, 1);
@@ -240,7 +245,8 @@ final class _Adapter implements RabbitMqAdapter {
   bool get isConnected => connected;
 
   @override
-  Future<void> connect(RabbitMqMessagingConfig config) async => connected = true;
+  Future<void> connect(RabbitMqMessagingConfig config) async =>
+      connected = true;
 
   @override
   Future<void> close() async {
@@ -249,7 +255,10 @@ final class _Adapter implements RabbitMqAdapter {
   }
 
   @override
-  Future<void> declareExchange({required String name, required bool durable}) async {}
+  Future<void> declareExchange({
+    required String name,
+    required bool durable,
+  }) async {}
 
   @override
   Future<void> declareQueue({
