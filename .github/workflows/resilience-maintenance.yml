@@ -1,0 +1,79 @@
+name: Resilience maintenance
+
+on:
+  push:
+    branches: [beta-resilience-nats-rabbitmq]
+    paths:
+      - "packages/podbus_core/**"
+      - ".github/workflows/resilience-maintenance.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: resilience-maintenance
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: beta-resilience-nats-rabbitmq
+          fetch-depth: 0
+
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
+        with:
+          sdk: 3.12.0
+
+      - name: Apply compile corrections
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('packages/podbus_core/lib/src/resilience.dart')
+          text = path.read_text()
+          text = text.replace(
+              "status: result.status,\n      message: result.message,",
+              "status: result.status,\n      checkedAt: result.checkedAt,\n      message: result.message,",
+          )
+          path.write_text(text)
+          PY
+
+      - name: Resolve dependencies
+        run: dart pub get
+
+      - name: Format
+        run: dart format packages/podbus_core
+
+      - name: Analyze
+        id: analyze
+        continue-on-error: true
+        run: dart analyze packages/podbus_core 2>&1 | tee resilience-analyze.log
+
+      - name: Test
+        id: test
+        continue-on-error: true
+        run: dart test packages/podbus_core/test/resilience_test.dart --reporter=expanded 2>&1 | tee resilience-test.log
+
+      - name: Commit result
+        env:
+          ANALYZE: ${{ steps.analyze.outcome }}
+          TEST: ${{ steps.test.outcome }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/resilience-maintenance.yml
+          if [ "$ANALYZE" = success ] && [ "$TEST" = success ]; then
+            rm -f resilience-analyze.log resilience-test.log
+            git add packages/podbus_core
+            git commit -m "Validate resilient transport recovery"
+          else
+            git add packages/podbus_core resilience-analyze.log resilience-test.log
+            git commit -m "Record resilience validation diagnostics"
+          fi
+          git push origin HEAD:beta-resilience-nats-rabbitmq
