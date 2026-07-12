@@ -1,0 +1,6 @@
+PodBus isolated beta qualification PR
+
+Base candidate: 14d19fc9d23cf4fa59454c394484888030fa0a8a
+Purpose: allocate an independent GitHub Actions concurrency key for the final fault, stress, soak, plain-Dart, CI, compatibility, and security evidence.
+
+This file changes no runtime behavior.
