@@ -53,14 +53,12 @@ jobs:
           path: test-results
           if-no-files-found: error
           retention-days: 7
-      - name: Commit harness and remove temporary machinery
+      - name: Commit end-to-end harness
         shell: bash
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm .github/workflows/apply-stress-harness-fix.yml
-          git rm tool/ci/apply_stress_harness_fix.py
           git add tool/stress_transports.dart .github/workflows/stress.yml
           git commit -m "Make large stress tests end-to-end"
           git push origin HEAD:beta-resilience-production-suite
