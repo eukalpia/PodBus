@@ -14,6 +14,7 @@ workspace:
   - packages/podbus_serverpod
   - examples/podbus_example
   - examples/podbus_example_client
+  - examples/plain_dart_service
 
 dev_dependencies:
   lints: ^6.0.0
