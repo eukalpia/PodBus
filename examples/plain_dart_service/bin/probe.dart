@@ -32,11 +32,10 @@ Future<void> main() async {
 
   try {
     await queue.connect();
-    await queue.enqueue(
-      _subject,
-      {'id': id, 'source': 'plain-dart-probe'},
-      idempotencyKey: id,
-    );
+    await queue.enqueue(_subject, {
+      'id': id,
+      'source': 'plain-dart-probe',
+    }, idempotencyKey: id);
 
     await _waitForHttp(
       client,
