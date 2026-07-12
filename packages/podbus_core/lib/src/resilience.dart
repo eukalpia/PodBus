@@ -28,6 +28,7 @@ final class ReconnectPolicy {
     this.backoffMultiplier = 2,
     this.jitter = 0.2,
     this.recoveryTimeout = const Duration(seconds: 30),
+    this.disposeTimeout = const Duration(seconds: 2),
     this.healthCheckInterval = const Duration(seconds: 5),
     this.healthCheckTimeout = const Duration(seconds: 2),
   }) : assert(maxAttempts > 0),
@@ -40,6 +41,9 @@ final class ReconnectPolicy {
   final double backoffMultiplier;
   final double jitter;
   final Duration recoveryTimeout;
+
+  /// Maximum time spent closing an unhealthy delegate during recovery.
+  final Duration disposeTimeout;
 
   /// Interval for proactive broker health probes. Set to `null` to disable
   /// background recovery and only reconnect after a failed operation.
@@ -100,6 +104,7 @@ void _validateReconnectPolicy(ReconnectPolicy policy) {
     );
   }
   if (policy.recoveryTimeout <= Duration.zero ||
+      policy.disposeTimeout <= Duration.zero ||
       policy.healthCheckTimeout <= Duration.zero) {
     throw const MessagingConfigurationException(
       'Reconnect timeouts must be greater than zero.',
@@ -167,7 +172,9 @@ final class ResilientMessageBus implements MessageBus {
     connecting = () async {
       final candidate = await _createConnectedDelegate();
       if (_closing || generation != _generation) {
-        await candidate.close(timeout: policy.recoveryTimeout);
+        await candidate
+            .close(timeout: policy.disposeTimeout)
+            .timeout(policy.disposeTimeout);
         throw const MessagingConnectionException(
           'Message bus connection was cancelled by shutdown.',
         );
@@ -352,7 +359,23 @@ final class ResilientMessageBus implements MessageBus {
     }
     final completer = Completer<void>();
     final generation = _generation;
-    _recovery = completer.future;
+    late final Future<void> guardedRecovery;
+    guardedRecovery = completer.future.timeout(
+      policy.recoveryTimeout,
+      onTimeout: () {
+        if (identical(_recovery, guardedRecovery)) {
+          _generation += 1;
+          _recovery = null;
+        }
+        final error = MessagingTimeoutException(
+          'Message bus recovery exceeded ${policy.recoveryTimeout}.',
+          timeout: policy.recoveryTimeout,
+        );
+        _lastRecoveryError = error;
+        throw error;
+      },
+    );
+    _recovery = guardedRecovery;
     unawaited(() async {
       Object? lastError = trigger;
       StackTrace? lastStackTrace;
@@ -391,7 +414,9 @@ final class ResilientMessageBus implements MessageBus {
           } on Object catch (error, stackTrace) {
             if (replacement != null) {
               try {
-                await replacement.close(timeout: policy.recoveryTimeout);
+                await replacement
+                    .close(timeout: policy.disposeTimeout)
+                    .timeout(policy.disposeTimeout);
               } on Object {
                 // Preserve the recovery failure.
               }
@@ -410,12 +435,12 @@ final class ResilientMessageBus implements MessageBus {
         _lastRecoveryError = error;
         completer.completeError(error, stackTrace);
       } finally {
-        if (identical(_recovery, completer.future)) {
+        if (identical(_recovery, guardedRecovery)) {
           _recovery = null;
         }
       }
     }());
-    return completer.future.timeout(policy.recoveryTimeout);
+    return guardedRecovery;
   }
 
   Future<MessageBus> _createConnectedDelegate() async {
@@ -425,7 +450,9 @@ final class ResilientMessageBus implements MessageBus {
       return delegate;
     } on Object catch (error, stackTrace) {
       try {
-        await delegate.close(timeout: policy.recoveryTimeout);
+        await delegate
+            .close(timeout: policy.disposeTimeout)
+            .timeout(policy.disposeTimeout);
       } on Object {
         // Preserve the connection failure.
       }
@@ -495,7 +522,9 @@ final class ResilientMessageBus implements MessageBus {
       return;
     }
     try {
-      await delegate.close(timeout: policy.recoveryTimeout);
+      await delegate
+          .close(timeout: policy.disposeTimeout)
+          .timeout(policy.disposeTimeout);
     } on Object {
       // Recovery continues with a fresh transport instance.
     }
@@ -565,7 +594,9 @@ final class ResilientDurableJobQueue implements DurableJobQueue {
     connecting = () async {
       final candidate = await _createConnectedDelegate();
       if (_closing || generation != _generation) {
-        await candidate.close(timeout: policy.recoveryTimeout);
+        await candidate
+            .close(timeout: policy.disposeTimeout)
+            .timeout(policy.disposeTimeout);
         throw const MessagingConnectionException(
           'Durable queue connection was cancelled by shutdown.',
         );
@@ -751,7 +782,23 @@ final class ResilientDurableJobQueue implements DurableJobQueue {
     }
     final completer = Completer<void>();
     final generation = _generation;
-    _recovery = completer.future;
+    late final Future<void> guardedRecovery;
+    guardedRecovery = completer.future.timeout(
+      policy.recoveryTimeout,
+      onTimeout: () {
+        if (identical(_recovery, guardedRecovery)) {
+          _generation += 1;
+          _recovery = null;
+        }
+        final error = MessagingTimeoutException(
+          'Durable job queue recovery exceeded ${policy.recoveryTimeout}.',
+          timeout: policy.recoveryTimeout,
+        );
+        _lastRecoveryError = error;
+        throw error;
+      },
+    );
+    _recovery = guardedRecovery;
     unawaited(() async {
       Object? lastError = trigger;
       StackTrace? lastStackTrace;
@@ -790,7 +837,9 @@ final class ResilientDurableJobQueue implements DurableJobQueue {
           } on Object catch (error, stackTrace) {
             if (replacement != null) {
               try {
-                await replacement.close(timeout: policy.recoveryTimeout);
+                await replacement
+                    .close(timeout: policy.disposeTimeout)
+                    .timeout(policy.disposeTimeout);
               } on Object {
                 // Preserve the recovery failure.
               }
@@ -809,12 +858,12 @@ final class ResilientDurableJobQueue implements DurableJobQueue {
         _lastRecoveryError = error;
         completer.completeError(error, stackTrace);
       } finally {
-        if (identical(_recovery, completer.future)) {
+        if (identical(_recovery, guardedRecovery)) {
           _recovery = null;
         }
       }
     }());
-    return completer.future.timeout(policy.recoveryTimeout);
+    return guardedRecovery;
   }
 
   Future<DurableJobQueue> _createConnectedDelegate() async {
@@ -824,7 +873,9 @@ final class ResilientDurableJobQueue implements DurableJobQueue {
       return delegate;
     } on Object catch (error, stackTrace) {
       try {
-        await delegate.close(timeout: policy.recoveryTimeout);
+        await delegate
+            .close(timeout: policy.disposeTimeout)
+            .timeout(policy.disposeTimeout);
       } on Object {
         // Preserve the connection failure.
       }
@@ -894,7 +945,9 @@ final class ResilientDurableJobQueue implements DurableJobQueue {
       return;
     }
     try {
-      await delegate.close(timeout: policy.recoveryTimeout);
+      await delegate
+          .close(timeout: policy.disposeTimeout)
+          .timeout(policy.disposeTimeout);
     } on Object {
       // Recovery continues with a fresh transport instance.
     }

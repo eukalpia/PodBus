@@ -427,6 +427,75 @@ void main() {
       await queue.close();
     });
 
+    test('bounds stalled delegate disposal during recovery', () async {
+      final closeGate = Completer<void>();
+      final delegates = <_FakeDurableQueue>[];
+      final queue = ResilientDurableJobQueue(
+        factory: () {
+          final delegate = _FakeDurableQueue(
+            closeGate: delegates.isEmpty ? closeGate.future : null,
+          );
+          delegates.add(delegate);
+          return delegate;
+        },
+        policy: const ReconnectPolicy(
+          maxAttempts: 3,
+          initialDelay: Duration.zero,
+          maxDelay: Duration.zero,
+          jitter: 0,
+          recoveryTimeout: Duration(seconds: 1),
+          disposeTimeout: Duration(milliseconds: 20),
+          healthCheckInterval: null,
+        ),
+      );
+
+      await queue.connect();
+      delegates.first.failNextEnqueue = true;
+      await queue
+          .enqueue('jobs.recovery', 1)
+          .timeout(const Duration(milliseconds: 500));
+
+      expect(delegates, hasLength(2));
+      closeGate.complete();
+      await queue.close();
+    });
+
+    test('clears a timed-out recovery before the next operation', () async {
+      final connectGate = Completer<void>();
+      final delegates = <_FakeDurableQueue>[];
+      final queue = ResilientDurableJobQueue(
+        factory: () {
+          final delegate = _FakeDurableQueue(
+            connectGate: delegates.length == 1 ? connectGate.future : null,
+          );
+          delegates.add(delegate);
+          return delegate;
+        },
+        policy: const ReconnectPolicy(
+          maxAttempts: 3,
+          initialDelay: Duration.zero,
+          maxDelay: Duration.zero,
+          jitter: 0,
+          recoveryTimeout: Duration(milliseconds: 40),
+          disposeTimeout: Duration(milliseconds: 10),
+          healthCheckInterval: null,
+        ),
+      );
+
+      await queue.connect();
+      delegates.first.failNextEnqueue = true;
+      await expectLater(
+        queue.enqueue('jobs.timeout', 1),
+        throwsA(isA<MessagingTimeoutException>()),
+      );
+
+      connectGate.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      await queue.enqueue('jobs.timeout', 2);
+      expect(delegates.length, greaterThanOrEqualTo(3));
+      await queue.close();
+    });
+
     test('close drains active proxy registrations and delegate', () async {
       final delegate = _FakeDurableQueue();
       final queue = ResilientDurableJobQueue(factory: () => delegate);
@@ -454,9 +523,15 @@ Future<void> _waitUntil(bool Function() predicate) async {
 }
 
 final class _FakeMessageBus implements MessageBus {
-  _FakeMessageBus({this.connectGate, this.connectError, this.subscribeError});
+  _FakeMessageBus({
+    this.connectGate,
+    this.closeGate,
+    this.connectError,
+    this.subscribeError,
+  });
 
   final Future<void>? connectGate;
+  final Future<void>? closeGate;
   final Object? connectError;
   final Object? subscribeError;
   final List<String> publishedSubjects = [];
@@ -486,6 +561,7 @@ final class _FakeMessageBus implements MessageBus {
 
   @override
   Future<void> close({Duration? timeout}) async {
+    await closeGate;
     closed = true;
     connected = false;
     for (final subscription in subscriptions.toList()) {
@@ -574,8 +650,10 @@ final class _FakeSubscription implements Subscription {
 }
 
 final class _FakeDurableQueue implements DurableJobQueue {
-  _FakeDurableQueue({this.connectError});
+  _FakeDurableQueue({this.connectGate, this.closeGate, this.connectError});
 
+  final Future<void>? connectGate;
+  final Future<void>? closeGate;
   final Object? connectError;
   final List<_FakeWorker> workers = [];
   bool connected = false;
@@ -595,12 +673,14 @@ final class _FakeDurableQueue implements DurableJobQueue {
 
   @override
   Future<void> connect() async {
+    await connectGate;
     if (connectError case final error?) throw error;
     connected = true;
   }
 
   @override
   Future<void> close({Duration? timeout}) async {
+    await closeGate;
     closed = true;
     connected = false;
     for (final worker in workers.toList()) {
