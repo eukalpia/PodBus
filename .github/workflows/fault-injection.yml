@@ -9,6 +9,9 @@ on:
       - "tool/fault_worker.dart"
       - "tool/fault_suite.dart"
       - "tool/src/fault_harness.dart"
+      - "tool/ci/start_integration_services.sh"
+      - "tool/ci/capture_rabbitmq_state.sh"
+      - "tool/ci/wait_for_rabbitmq.sh"
       - "docker-compose.integration.yaml"
       - ".github/workflows/fault-injection.yml"
   workflow_dispatch:
@@ -45,23 +48,8 @@ jobs:
           sdk: ${{ env.DART_SDK }}
       - name: Resolve dependencies
         run: dart pub get
-      - name: Start brokers and Toxiproxy
-        shell: bash
-        run: |
-          set +e
-          mkdir -p test-results
-          docker compose -f docker-compose.integration.yaml config \
-            > test-results/compose-config.yaml 2>&1
-          docker compose -f docker-compose.integration.yaml up -d \
-            nats rabbitmq toxiproxy 2>&1 | tee test-results/compose-up.log
-          status=${PIPESTATUS[0]}
-          docker compose -f docker-compose.integration.yaml ps -a \
-            > test-results/compose-ps-start.txt 2>&1 || true
-          if [[ $status -ne 0 ]]; then
-            docker compose -f docker-compose.integration.yaml logs --no-color \
-              nats rabbitmq toxiproxy > test-results/compose-start-failure.log 2>&1 || true
-            exit "$status"
-          fi
+      - name: Start clean brokers and Toxiproxy
+        run: bash tool/ci/start_integration_services.sh nats rabbitmq toxiproxy
       - name: Wait for services
         run: |
           bash tool/ci/wait_for_nats.sh
@@ -80,7 +68,9 @@ jobs:
           docker compose -f docker-compose.integration.yaml ps -a \
             > test-results/compose-ps-final.txt 2>&1 || true
           docker compose -f docker-compose.integration.yaml logs --no-color \
-            nats rabbitmq toxiproxy > test-results/fault-brokers.log 2>&1 || true
+            nats rabbitmq-init rabbitmq toxiproxy \
+            > test-results/fault-brokers.log 2>&1 || true
+          bash tool/ci/capture_rabbitmq_state.sh || true
       - name: Upload fault diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -91,4 +81,4 @@ jobs:
           retention-days: 30
       - name: Stop services
         if: always()
-        run: docker compose -f docker-compose.integration.yaml down -v
+        run: docker compose -f docker-compose.integration.yaml down -v --remove-orphans
