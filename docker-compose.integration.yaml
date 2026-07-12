@@ -7,11 +7,6 @@ services:
       - "8222:8222"
     volumes:
       - nats-data:/data
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8222/healthz"]
-      interval: 2s
-      timeout: 2s
-      retries: 30
 
   rabbitmq:
     image: rabbitmq:3.13.7-management-alpine
@@ -35,10 +30,8 @@ services:
     image: ghcr.io/shopify/toxiproxy:2.12.0
     command: ["-host", "0.0.0.0"]
     depends_on:
-      nats:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
+      - nats
+      - rabbitmq
     ports:
       - "8474:8474"
       - "14222:14222"
