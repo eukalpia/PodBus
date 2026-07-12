@@ -1,6 +1,7 @@
 name: Resilience soak
 
 on:
+  pull_request:
   schedule:
     - cron: "17 2 * * 0"
   workflow_dispatch:
@@ -20,7 +21,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: resilience-soak
+  group: resilience-soak-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -29,8 +30,36 @@ env:
   ALLOW_SHORT: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_short || false }}
 
 jobs:
+  changes:
+    name: Detect soak qualification request
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.detect.outputs.run }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 2
+      - id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" || "${{ github.event_name }}" == "schedule" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed="$(git diff --name-only HEAD^ HEAD)"
+          printf '%s\n' "$changed"
+          if grep -Eq '^(packages/podbus_(core|nats|rabbitmq)/|tool/(soak_resilience|fault_|src/fault_harness|ci/(start_integration_services|capture_rabbitmq_state|wait_for_rabbitmq)|qualification/beta-candidate)|docker-compose\.integration\.yaml$)' <<< "$changed"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
   soak:
-    name: NATS and RabbitMQ soak
+    name: NATS and RabbitMQ one-hour soak
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
@@ -58,8 +87,8 @@ jobs:
           PY
       - name: Resolve dependencies
         run: dart pub get
-      - name: Start brokers and Toxiproxy
-        run: docker compose -f docker-compose.integration.yaml up -d nats rabbitmq toxiproxy
+      - name: Start clean brokers and Toxiproxy
+        run: bash tool/ci/start_integration_services.sh nats rabbitmq toxiproxy
       - name: Wait for services
         run: |
           bash tool/ci/wait_for_nats.sh
@@ -71,11 +100,26 @@ jobs:
           --duration=${SOAK_DURATION}
           --allow-short=${ALLOW_SHORT}
           --report=test-results/soak-summary.json
+      - name: Publish soak summary
+        if: always()
+        shell: bash
+        run: |
+          if [[ -s test-results/soak-summary.json ]]; then
+            {
+              echo '## PodBus resilience soak'
+              echo '```json'
+              cat test-results/soak-summary.json
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Capture broker logs
         if: always()
-        run: >-
-          docker compose -f docker-compose.integration.yaml logs --no-color
-          nats rabbitmq toxiproxy > test-results/soak-brokers.log
+        shell: bash
+        run: |
+          mkdir -p test-results
+          docker compose -f docker-compose.integration.yaml logs --no-color \
+            nats rabbitmq-init rabbitmq toxiproxy > test-results/soak-brokers.log 2>&1 || true
+          bash tool/ci/capture_rabbitmq_state.sh || true
       - name: Upload soak evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -86,4 +130,4 @@ jobs:
           retention-days: 90
       - name: Stop services
         if: always()
-        run: docker compose -f docker-compose.integration.yaml down -v
+        run: docker compose -f docker-compose.integration.yaml down -v --remove-orphans
