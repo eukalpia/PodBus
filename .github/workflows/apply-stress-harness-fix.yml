@@ -8,14 +8,14 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: apply-stress-harness-fix
   cancel-in-progress: false
 
 jobs:
-  patch-and-commit:
+  patch-and-export:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -27,38 +27,25 @@ jobs:
       - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260
         with:
           sdk: 3.12.0
-      - name: Apply and format end-to-end stress harness
-        id: patch
-        shell: bash
-        run: |
-          set +e
-          mkdir -p test-results
-          python3 tool/ci/apply_stress_harness_fix.py \
-            > test-results/stress-patch.log 2>&1
-          status=$?
-          git diff > test-results/stress-patch.diff || true
-          if [[ $status -eq 0 ]]; then
-            dart format tool/stress_transports.dart \
-              >> test-results/stress-patch.log 2>&1
-            status=$?
-            git diff > test-results/stress-patch.diff || true
-          fi
-          cat test-results/stress-patch.log
-          exit "$status"
-      - name: Upload patch diagnostics
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: stress-harness-patch-diagnostics
-          path: test-results
-          if-no-files-found: error
-          retention-days: 7
-      - name: Commit end-to-end harness
+      - name: Apply, format, and export end-to-end stress harness
         shell: bash
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add tool/stress_transports.dart .github/workflows/stress.yml
-          git commit -m "Make large stress tests end-to-end"
-          git push origin HEAD:beta-resilience-production-suite
+          mkdir -p test-results/files/tool
+          mkdir -p test-results/files/.github/workflows
+          python3 tool/ci/apply_stress_harness_fix.py \
+            > test-results/stress-patch.log 2>&1
+          dart format tool/stress_transports.dart \
+            >> test-results/stress-patch.log 2>&1
+          git diff > test-results/stress-patch.diff
+          cp tool/stress_transports.dart test-results/files/tool/stress_transports.dart
+          cp .github/workflows/stress.yml \
+            test-results/files/.github/workflows/stress.yml
+          cat test-results/stress-patch.log
+      - name: Upload complete patched files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: stress-harness-patched-files
+          path: test-results
+          if-no-files-found: error
+          retention-days: 7
