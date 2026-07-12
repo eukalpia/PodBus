@@ -2,17 +2,6 @@ name: Large transport stress
 
 on:
   pull_request:
-    paths:
-      - "packages/podbus_core/**"
-      - "packages/podbus_nats/**"
-      - "packages/podbus_rabbitmq/**"
-      - "packages/podbus_kafka/**"
-      - "tool/stress_transports.dart"
-      - "tool/ci/start_integration_services.sh"
-      - "tool/ci/capture_rabbitmq_state.sh"
-      - "tool/ci/wait_for_rabbitmq.sh"
-      - "docker-compose.integration.yaml"
-      - ".github/workflows/stress.yml"
   workflow_dispatch:
     inputs:
       profile:
@@ -36,8 +25,36 @@ env:
   STRESS_PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profile || 'large' }}
 
 jobs:
+  changes:
+    name: Detect stress-relevant changes
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.detect.outputs.run }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 2
+      - id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed="$(git diff --name-only HEAD^ HEAD)"
+          printf '%s\n' "$changed"
+          if grep -Eq '^(packages/podbus_(core|nats|rabbitmq|kafka)/|tool/(stress_transports|ci/(start_integration_services|capture_rabbitmq_state|wait_for_rabbitmq)|qualification/beta-candidate)|docker-compose\.integration\.yaml$|\.github/workflows/stress\.yml$)' <<< "$changed"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
   transport-stress:
     name: ${{ matrix.name }}
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     continue-on-error: ${{ matrix.experimental }}
