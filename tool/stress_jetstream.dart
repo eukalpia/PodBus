@@ -295,7 +295,9 @@ Future<void> _publisherMain(Map<String, Object?> arguments) async {
       'stackTrace': stackTrace.toString(),
     });
   } finally {
-    await _closeQuietly(() => queue.close(timeout: const Duration(seconds: 10)));
+    await _closeQuietly(
+      () => queue.close(timeout: const Duration(seconds: 10)),
+    );
   }
 }
 
@@ -361,7 +363,9 @@ Future<void> _consumerMain(Map<String, Object?> arguments) async {
     );
     final health = await queue.healthCheck();
     if (health.status == HealthStatus.unhealthy) {
-      throw StateError('JetStream consumer $id is unhealthy: ${health.message}');
+      throw StateError(
+        'JetStream consumer $id is unhealthy: ${health.message}',
+      );
     }
     progressTimer = Timer.periodic(
       const Duration(milliseconds: 100),
@@ -393,7 +397,9 @@ Future<void> _consumerMain(Map<String, Object?> arguments) async {
     if (worker != null) {
       await _closeQuietly(worker.close);
     }
-    await _closeQuietly(() => queue.close(timeout: const Duration(seconds: 10)));
+    await _closeQuietly(
+      () => queue.close(timeout: const Duration(seconds: 10)),
+    );
   }
 }
 
