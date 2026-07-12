@@ -1,1 +1,2 @@
 Validate and apply the pinned dart_amqp publisher-confirm patch for PodBus RabbitMQ stress qualification.
+Registered on the default branch for this one-time run.
