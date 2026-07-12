@@ -45,7 +45,7 @@ jobs:
           fi
           changed="$(git diff --name-only HEAD^ HEAD)"
           printf '%s\n' "$changed"
-          if grep -Eq '^(packages/podbus_(core|nats|rabbitmq|kafka)/|tool/(stress_transports|ci/(start_integration_services|capture_rabbitmq_state|wait_for_rabbitmq)|qualification/beta-candidate)|docker-compose\.integration\.yaml$|\.github/workflows/stress\.yml$)' <<< "$changed"; then
+          if grep -Eq '^(packages/podbus_(core|nats|rabbitmq|kafka)/|tool/(stress_(transports|nats_core)|ci/(start_integration_services|capture_rabbitmq_state|wait_for_rabbitmq)|qualification/beta-candidate)|docker-compose\.integration\.yaml$|\.github/workflows/stress\.yml$)' <<< "$changed"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -206,8 +206,12 @@ jobs:
           fi
           export PODBUS_STRESS_MESSAGES="$messages"
           result="test-results/${{ matrix.name }}.md"
+          runner=(dart run tool/stress_transports.dart)
+          if [[ "${{ matrix.transport }}" == "nats" && "${{ matrix.mode }}" == "fast" ]]; then
+            runner=(dart run tool/stress_nats_core.dart)
+          fi
           set +e
-          dart run tool/stress_transports.dart 2>&1 | tee "$result"
+          "${runner[@]}" 2>&1 | tee "$result"
           status=${PIPESTATUS[0]}
           set -e
           cat "$result" >> "$GITHUB_STEP_SUMMARY"
