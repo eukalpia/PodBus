@@ -37,18 +37,26 @@ jobs:
           dart format tool/stress_transports.dart \
             >> test-results/stress-patch.log 2>&1
           git diff > test-results/stress-patch.diff
+          cp tool/stress_transports.dart test-results/stress_transports.dart
+          cp .github/workflows/stress.yml test-results/stress.yml
           cat test-results/stress-patch.log
       - name: Commit with branch reconciliation
         shell: bash
         run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add tool/stress_transports.dart .github/workflows/stress.yml
-          git commit -m "Make large stress tests end-to-end"
-          git fetch origin beta-resilience-production-suite
-          git rebase origin/beta-resilience-production-suite
-          git push origin HEAD:beta-resilience-production-suite
+          set +e
+          {
+            set -x
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add tool/stress_transports.dart .github/workflows/stress.yml
+            git commit -m "Make large stress tests end-to-end"
+            git fetch origin beta-resilience-production-suite
+            git rebase origin/beta-resilience-production-suite
+            git push origin HEAD:beta-resilience-production-suite
+          } > test-results/stress-commit.log 2>&1
+          status=$?
+          cat test-results/stress-commit.log
+          exit "$status"
       - name: Upload patch diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -56,4 +64,5 @@ jobs:
           name: stress-harness-commit-diagnostics
           path: test-results
           if-no-files-found: warn
+          include-hidden-files: true
           retention-days: 7
