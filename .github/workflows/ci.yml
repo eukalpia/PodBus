@@ -27,7 +27,7 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          mkdir -p exported-patch
+          mkdir -p exported-patch/chunks
           python3 - <<'PY' > exported-patch/reconstruction.log 2>&1
           import base64
           import json
@@ -63,6 +63,8 @@ jobs:
                           payload = json.load(response)
                       chunk = base64.b64decode(payload['content'])
                       print(f'chunk bytes: {len(chunk)}', flush=True)
+                      with open(f'exported-patch/chunks/{index:02d}-{sha}.bin', 'wb') as part:
+                          part.write(chunk)
                       output.write(chunk)
               print('reconstruction complete', flush=True)
           except Exception:
@@ -71,10 +73,7 @@ jobs:
 
           gzip --test exported-patch/podbus-fault.patch.gz > exported-patch/gzip-test.txt 2>&1 || true
           gzip --decompress --stdout exported-patch/podbus-fault.patch.gz > exported-patch/podbus-fault.partial.patch 2> exported-patch/decompress-error.txt || true
-          if test -s exported-patch/podbus-fault.partial.patch; then
-            git apply --check exported-patch/podbus-fault.partial.patch > exported-patch/apply-check.txt 2>&1 || true
-          fi
-          find exported-patch -maxdepth 1 -type f -printf '%f %s bytes\n' | sort > exported-patch/sizes.txt
+          find exported-patch -type f -printf '%P %s bytes\n' | sort > exported-patch/sizes.txt
 
       - name: Upload patch diagnostics
         if: always()
