@@ -1,0 +1,395 @@
+name: Execute beta resilience
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/execute-beta-resilience.yml"
+
+permissions:
+  contents: write
+
+env:
+  BRANCH: beta-resilience-nats-rabbitmq
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ env.BRANCH }}
+          fetch-depth: 0
+
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
+        with:
+          sdk: 3.12.0
+
+      - name: Apply resilience implementation
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new):
+              file = Path(path)
+              text = file.read_text()
+              if old not in text:
+                  raise SystemExit(f'Expected fragment not found in {path}: {old[:120]!r}')
+              file.write_text(text.replace(old, new, 1))
+
+          nats = 'packages/podbus_nats/lib/src/nats_jetstream_job_queue.dart'
+          replace(nats,
+          """    Duration fetchTimeout = const Duration(seconds: 1),
+    int fetchBatchSize = 1,
+  }) : messagingConfig = messagingConfig ?? MessagingConfig(codec: codec),""",
+          """    Duration fetchTimeout = const Duration(seconds: 1),
+    int fetchBatchSize = 1,
+    Duration inProgressInterval = const Duration(seconds: 20),
+    Duration workerRecoveryInitialDelay = const Duration(milliseconds: 100),
+    Duration workerRecoveryMaxDelay = const Duration(seconds: 5),
+  }) : messagingConfig = messagingConfig ?? MessagingConfig(codec: codec),""")
+          replace(nats,
+          """       _idempotencyTtl = idempotencyTtl,
+       _fetchTimeout = fetchTimeout,
+       _fetchBatchSize = fetchBatchSize {
+    if (fetchBatchSize < 1) {""",
+          """       _idempotencyTtl = idempotencyTtl,
+       _fetchTimeout = fetchTimeout,
+       _fetchBatchSize = fetchBatchSize,
+       _inProgressInterval = inProgressInterval,
+       _workerRecoveryInitialDelay = workerRecoveryInitialDelay,
+       _workerRecoveryMaxDelay = workerRecoveryMaxDelay {
+    if (fetchBatchSize < 1) {""")
+          replace(nats,
+          """    if (fetchBatchSize < 1) {
+      throw const MessagingConfigurationException(
+        'NATS JetStream fetch batch size must be greater than zero.',
+      );
+    }
+  }""",
+          """    if (fetchBatchSize < 1) {
+      throw const MessagingConfigurationException(
+        'NATS JetStream fetch batch size must be greater than zero.',
+      );
+    }
+    if (inProgressInterval.isNegative) {
+      throw const MessagingConfigurationException(
+        'NATS JetStream in-progress interval must not be negative.',
+      );
+    }
+    if (workerRecoveryInitialDelay.isNegative ||
+        workerRecoveryMaxDelay.isNegative ||
+        workerRecoveryMaxDelay < workerRecoveryInitialDelay) {
+      throw const MessagingConfigurationException(
+        'NATS JetStream worker recovery delays are invalid.',
+      );
+    }
+  }""")
+          replace(nats,
+          """  final Duration _fetchTimeout;
+  final int _fetchBatchSize;
+  final List<_NatsJetStreamWorker<Object?>> _workers = [];""",
+          """  final Duration _fetchTimeout;
+  final int _fetchBatchSize;
+  final Duration _inProgressInterval;
+  final Duration _workerRecoveryInitialDelay;
+  final Duration _workerRecoveryMaxDelay;
+  final List<_NatsJetStreamWorker<Object?>> _workers = [];""")
+          replace(nats,
+          """      fetchTimeout: _fetchTimeout,
+      fetchBatchSize: _fetchBatchSize,
+      consumer: consumer,""",
+          """      fetchTimeout: _fetchTimeout,
+      fetchBatchSize: _fetchBatchSize,
+      inProgressInterval: _inProgressInterval,
+      recoveryInitialDelay: _workerRecoveryInitialDelay,
+      recoveryMaxDelay: _workerRecoveryMaxDelay,
+      consumer: consumer,""")
+          replace(nats,
+          """    required this.fetchTimeout,
+    required this.fetchBatchSize,
+    required this.consumer,""",
+          """    required this.fetchTimeout,
+    required this.fetchBatchSize,
+    required this.inProgressInterval,
+    required this.recoveryInitialDelay,
+    required this.recoveryMaxDelay,
+    required this.consumer,""")
+          replace(nats,
+          """  final Duration fetchTimeout;
+  final int fetchBatchSize;
+  final NatsJetStreamConsumer consumer;""",
+          """  final Duration fetchTimeout;
+  final int fetchBatchSize;
+  final Duration inProgressInterval;
+  final Duration recoveryInitialDelay;
+  final Duration recoveryMaxDelay;
+  final NatsJetStreamConsumer consumer;""")
+          replace(nats,
+          """  Future<void> _run() async {
+    while (!_closed) {
+      try {
+        final messages = await consumer.fetch(
+          batch: fetchBatchSize,
+          timeout: fetchTimeout,
+        );
+        if (messages.isEmpty) {
+          continue;
+        }
+        for (final message in messages) {
+          if (_closed) {
+            return;
+          }
+          await _process(message);
+        }
+      } on Object catch (error, stackTrace) {
+        lastError = error;
+        lastStackTrace = stackTrace;
+        queue.messagingConfig.log(
+          MessagingLogLevel.error,
+          'NATS JetStream worker loop failed.',
+          error: error,
+          stackTrace: stackTrace,
+          attributes: {
+            'transport': 'nats-jetstream',
+            'topic': topic,
+            'consumer': consumerName,
+          },
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      }
+    }
+  }""",
+          """  Future<void> _run() async {
+    var consecutiveFailures = 0;
+    while (!_closed) {
+      try {
+        final messages = await consumer.fetch(
+          batch: fetchBatchSize,
+          timeout: fetchTimeout,
+        );
+        consecutiveFailures = 0;
+        if (messages.isEmpty) {
+          continue;
+        }
+        for (final message in messages) {
+          if (_closed) {
+            return;
+          }
+          await _process(message);
+        }
+      } on Object catch (error, stackTrace) {
+        consecutiveFailures += 1;
+        lastError = error;
+        lastStackTrace = stackTrace;
+        queue.messagingConfig.log(
+          MessagingLogLevel.error,
+          'NATS JetStream worker loop failed.',
+          error: error,
+          stackTrace: stackTrace,
+          attributes: {
+            'transport': 'nats-jetstream',
+            'topic': topic,
+            'consumer': consumerName,
+            'consecutiveFailures': consecutiveFailures,
+          },
+        );
+        final exponential = recoveryInitialDelay.inMicroseconds *
+            math.pow(2, consecutiveFailures - 1).toDouble();
+        final delay = Duration(
+          microseconds: math.min(
+            exponential,
+            recoveryMaxDelay.inMicroseconds.toDouble(),
+          ).round(),
+        );
+        if (delay > Duration.zero) {
+          await Future<void>.delayed(delay);
+        }
+      }
+    }
+  }""")
+          replace(nats,
+          """      final payload = await queue._decode<T>(message);
+      await handler(context, payload);
+      if (!context.completed) {
+        await context.ack();
+      }
+      queue.messagingConfig.recordMetric(""",
+          """      final payload = await queue._decode<T>(message);
+      final heartbeat = _NatsInProgressHeartbeat(
+        message: message,
+        interval: inProgressInterval,
+        onError: (error, stackTrace) {
+          lastError = error;
+          lastStackTrace = stackTrace;
+          queue.messagingConfig.log(
+            MessagingLogLevel.error,
+            'NATS JetStream in-progress heartbeat failed.',
+            error: error,
+            stackTrace: stackTrace,
+            attributes: {
+              'transport': 'nats-jetstream',
+              'topic': topic,
+              'consumer': consumerName,
+            },
+          );
+        },
+      )..start();
+      try {
+        await handler(context, payload);
+      } finally {
+        await heartbeat.stop();
+      }
+      if (!context.completed) {
+        await context.ack();
+      }
+      lastError = null;
+      lastStackTrace = null;
+      queue.messagingConfig.recordMetric(""")
+          marker = 'final class _NatsJetStreamJobContext implements JobContext {'
+          helper = r'''final class _NatsInProgressHeartbeat {
+  _NatsInProgressHeartbeat({
+    required this.message,
+    required this.interval,
+    required this.onError,
+  });
+
+  final NatsJetStreamMessage message;
+  final Duration interval;
+  final void Function(Object error, StackTrace stackTrace) onError;
+  Timer? _timer;
+  Future<void>? _active;
+  var _stopped = false;
+
+  void start() {
+    if (interval <= Duration.zero) return;
+    _timer = Timer.periodic(interval, (_) => _tick());
+  }
+
+  void _tick() {
+    if (_stopped || _active != null) return;
+    late final Future<void> task;
+    task = Future<void>.sync(() async {
+      final sent = await message.inProgress();
+      if (!sent) {
+        throw const MessagingConnectionException(
+          'NATS JetStream in-progress heartbeat was not accepted.',
+        );
+      }
+    }).then<void>(
+      (_) {},
+      onError: (Object error, StackTrace stackTrace) {
+        onError(error, stackTrace);
+      },
+    ).whenComplete(() {
+      if (identical(_active, task)) _active = null;
+    });
+    _active = task;
+  }
+
+  Future<void> stop() async {
+    _stopped = true;
+    _timer?.cancel();
+    final active = _active;
+    if (active != null) await active;
+  }
+}
+
+'''
+          path = Path(nats)
+          text = path.read_text()
+          if marker not in text:
+              raise SystemExit('NATS context marker missing')
+          path.write_text(text.replace(marker, helper + marker, 1))
+
+          rabbit = 'packages/podbus_rabbitmq/lib/src/rabbitmq_message_bus.dart'
+          replace(rabbit,
+          """  void _recordWorkerError(Object error) {
+    _lastWorkerError = error;
+    _lastWorkerErrorAt = messagingConfig.now();
+  }
+""",
+          """  void _recordWorkerError(Object error) {
+    _lastWorkerError = error;
+    _lastWorkerErrorAt = messagingConfig.now();
+  }
+
+  void _clearWorkerError() {
+    _lastWorkerError = null;
+    _lastWorkerErrorAt = null;
+  }
+""")
+          replace(rabbit,
+          """      bus.messagingConfig.recordMetric(
+        'podbus.jobs.completed',
+        attributes: {'transport': 'rabbitmq', 'topic': topic},
+      );""",
+          """      bus._clearWorkerError();
+      bus.messagingConfig.recordMetric(
+        'podbus.jobs.completed',
+        attributes: {'transport': 'rabbitmq', 'topic': topic},
+      );""")
+
+          nt = Path('packages/podbus_nats/test/nats_resilience_test.dart')
+          text = nt.read_text().replace("import 'dart:async';", "import 'dart:async';\nimport 'dart:convert';")
+          text = text.replace(
+          """  _Message(this.subject, Map<String, Object?> payload, {this.deliveryCount = 1})
+    : bytes = JsonMessageCodec().encode(payload).then((value) => value.bytes) as dynamic;
+
+  _Message.raw(this.subject, this.bytes, {this.deliveryCount = 1});""",
+          """  _Message(this.subject, Map<String, Object?> payload, {this.deliveryCount = 1})
+    : bytes = utf8.encode(jsonEncode(payload));""")
+          nt.write_text(text)
+
+          rt = Path('packages/podbus_rabbitmq/test/rabbitmq_resilience_test.dart')
+          text = rt.read_text()
+          text = text.replace(
+              "final class _Adapter implements RabbitMqAdapter {\n  final consumer = _Consumer();",
+              "final class _Adapter implements RabbitMqAdapter {\n  _Adapter() {\n    _currentAdapterEvents = events;\n  }\n\n  final consumer = _Consumer();",
+          )
+          rt.write_text(text)
+
+          stale = Path('.github/workflows/beta-resilience-maintenance.yml')
+          if stale.exists():
+              stale.unlink()
+          PY
+
+      - name: Resolve dependencies
+        run: dart pub get
+
+      - name: Format
+        run: dart format packages/podbus_core packages/podbus_nats packages/podbus_rabbitmq
+
+      - name: Analyze and test
+        run: |
+          dart analyze packages/podbus_core packages/podbus_nats packages/podbus_rabbitmq
+          dart test packages/podbus_core/test/resilience_test.dart --reporter=expanded
+          dart test packages/podbus_nats/test --exclude-tags=integration --reporter=expanded
+          dart test packages/podbus_rabbitmq/test --exclude-tags=integration --reporter=expanded
+
+      - name: Commit validated branch
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add packages/podbus_core packages/podbus_nats packages/podbus_rabbitmq .github/workflows
+          git commit -m "Harden NATS and RabbitMQ resilience"
+          git push origin HEAD:${BRANCH}
+
+  cleanup:
+    needs: validate
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: main
+      - name: Remove executor workflow
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/execute-beta-resilience.yml
+          git commit -m "Remove completed resilience executor"
+          git push origin HEAD:main
