@@ -54,13 +54,27 @@ jobs:
           gzip --test /tmp/final-fault-suite.patch.gz || status=$?
           gzip --decompress --stdout /tmp/final-fault-suite.patch.gz > /tmp/final-fault-suite.patch || status=$?
           wc -c /tmp/final-fault-suite.patch || status=$?
-          git apply --check /tmp/final-fault-suite.patch || status=$?
+          apply_args=(
+            --exclude=.github/patches/fault-production.part00
+            --exclude=.github/patches/fault-production.part01
+            --exclude=.github/patches/resilience-production.patch.gz.b64
+            --exclude=.github/workflows/apply-pr10-resilience.yml
+            --exclude=.github/workflows/apply-resilience-production.yml
+            --exclude=.github/workflows/export-pr-source.yml
+          )
+          git apply --check "${apply_args[@]}" /tmp/final-fault-suite.patch || status=$?
           if [ "$status" -eq 0 ]; then
-            git apply /tmp/final-fault-suite.patch || status=$?
+            git apply "${apply_args[@]}" /tmp/final-fault-suite.patch || status=$?
           fi
           if [ "$status" -eq 0 ]; then
             rm -f \
+              .github/patches/fault-production.part00 \
+              .github/patches/fault-production.part01 \
+              .github/patches/resilience-production.patch.gz.b64 \
               .github/patches/final-fault-suite.part* \
+              .github/workflows/apply-pr10-resilience.yml \
+              .github/workflows/apply-resilience-production.yml \
+              .github/workflows/export-pr-source.yml \
               .github/workflows/apply-final-fault-suite.yml \
               .github/workflows/export-fault-patch.yml
             rmdir .github/patches 2>/dev/null || true
