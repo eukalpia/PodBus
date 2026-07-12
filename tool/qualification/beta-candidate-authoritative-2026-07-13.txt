@@ -1,0 +1,9 @@
+Authoritative PodBus beta qualification
+
+Runtime candidate: 14d19fc9d23cf4fa59454c394484888030fa0a8a
+Qualification workflow candidate includes:
+- global cancellation of superseded heavy runs;
+- complete stderr and exit-status capture for stress scenarios;
+- four-minute watchdog and retained logs for each isolated fault scenario.
+
+This marker must execute the real 12-scenario fault matrix, 3.25M-message NATS/RabbitMQ stress matrix, and one-hour soak. A skipped detector job is not qualification evidence.
