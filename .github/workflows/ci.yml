@@ -48,7 +48,7 @@ jobs:
               'fbef42873ae56426391fd1574075cc37dafe8998',
           ]
           try:
-              with open('/tmp/podbus-fault.patch.gz', 'wb') as output:
+              with open('exported-patch/podbus-fault.patch.gz', 'wb') as output:
                   for index, sha in enumerate(chunks):
                       print(f'fetching {index}: {sha}', flush=True)
                       request = urllib.request.Request(
@@ -69,16 +69,10 @@ jobs:
               traceback.print_exc()
           PY
 
-          if gzip --test /tmp/podbus-fault.patch.gz > exported-patch/gzip-test.txt 2>&1; then
-            gzip --decompress --stdout /tmp/podbus-fault.patch.gz > exported-patch/podbus-fault.patch
-            cp /tmp/podbus-fault.patch.gz exported-patch/
-            if git apply --check exported-patch/podbus-fault.patch > exported-patch/apply-check.txt 2>&1; then
-              echo compatible > exported-patch/apply-status.txt
-            else
-              echo needs-rebase > exported-patch/apply-status.txt
-            fi
-          else
-            echo reconstruction-failed > exported-patch/apply-status.txt
+          gzip --test exported-patch/podbus-fault.patch.gz > exported-patch/gzip-test.txt 2>&1 || true
+          gzip --decompress --stdout exported-patch/podbus-fault.patch.gz > exported-patch/podbus-fault.partial.patch 2> exported-patch/decompress-error.txt || true
+          if test -s exported-patch/podbus-fault.partial.patch; then
+            git apply --check exported-patch/podbus-fault.partial.patch > exported-patch/apply-check.txt 2>&1 || true
           fi
           find exported-patch -maxdepth 1 -type f -printf '%f %s bytes\n' | sort > exported-patch/sizes.txt
 
