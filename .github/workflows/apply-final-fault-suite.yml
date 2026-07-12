@@ -65,6 +65,7 @@ jobs:
           git apply --check "${apply_args[@]}" /tmp/final-fault-suite.patch || status=$?
           if [ "$status" -eq 0 ]; then
             git apply "${apply_args[@]}" /tmp/final-fault-suite.patch || status=$?
+            sed -i 's#image: shopify/toxiproxy:2.9.0#image: ghcr.io/shopify/toxiproxy:2.9.0#' docker-compose.integration.yaml || status=$?
           fi
           if [ "$status" -eq 0 ]; then
             rm -f \
