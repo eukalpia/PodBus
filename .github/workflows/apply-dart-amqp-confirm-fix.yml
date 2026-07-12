@@ -6,10 +6,12 @@ on:
       - fix/rabbitmq-publisher-lanes
     paths:
       - ".github/workflows/apply-dart-amqp-confirm-fix.yml"
+      - "tool/ci/vendor_dart_amqp_patch.py"
       - "tool/qualification/dart-amqp-confirm-fix-trigger.txt"
   pull_request:
     paths:
       - ".github/workflows/apply-dart-amqp-confirm-fix.yml"
+      - "tool/ci/vendor_dart_amqp_patch.py"
       - "tool/qualification/dart-amqp-confirm-fix-trigger.txt"
   workflow_dispatch:
 
@@ -50,135 +52,43 @@ jobs:
             --exclude=.github \
             --exclude=coverage \
             /tmp/dart_amqp/ third_party/dart_amqp/
-      - name: Apply publisher-confirm and error-normalization patches
+      - name: Apply reproducible PodBus patches
+        run: python3 tool/ci/vendor_dart_amqp_patch.py
+      - name: Resolve workspace
+        run: dart pub get
+      - name: Commit generated patch before validation
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          channel = Path('third_party/dart_amqp/lib/src/client/impl/channel_impl.dart')
-          source = channel.read_text()
-          old = '''    // Multi Ack/Nack; messages up to seqNo
-              for (var pendingSeqNo in _pendingDeliveries.keys) {
-                if (pendingSeqNo > seqNo) {
-                  // only interested in keys up to pendingSeqNo
-                  break;
-                }
-
-                _PublishNotificationImpl? notification = _pendingDeliveries.remove(seqNo);
-                if (notification != null &&
-                    _publishNotificationStream.hasListener &&
-                    !_publishNotificationStream.isClosed) {
-                  notification.published = ack;
-                  _publishNotificationStream.add(notification);
-                }
-              }
-
-              return;'''
-          new = '''    // Multi Ack/Nack; messages up to seqNo. Snapshot matching keys before
-              // mutating the map because Map.keys is a live iterable.
-              final confirmedSequenceNumbers = _pendingDeliveries.keys
-                  .where((pendingSeqNo) => pendingSeqNo <= seqNo)
-                  .toList(growable: false);
-
-              for (final pendingSeqNo in confirmedSequenceNumbers) {
-                final notification = _pendingDeliveries.remove(pendingSeqNo);
-                if (notification != null &&
-                    _publishNotificationStream.hasListener &&
-                    !_publishNotificationStream.isClosed) {
-                  notification.published = ack;
-                  _publishNotificationStream.add(notification);
-                }
-              }
-
-              return;'''
-          if old not in source:
-              raise SystemExit('publisher-confirm patch target not found')
-          channel.write_text(source.replace(old, new, 1))
-
-          client = Path('third_party/dart_amqp/lib/src/client/impl/client_impl.dart')
-          source = client.read_text()
-          old = '''  void _handleException(ex) {
-              // Ignore exceptions while shutting down
-              if (_clientClosed != null) {
-                return;
-              }
-'''
-          new = '''  void _handleException(ex) {
-              // The decoder can surface Error objects as well as Exception objects.
-              // Normalize them before publishing to the Exception-typed error stream.
-              if (ex is! Exception) {
-                ex = FatalException(
-                    "Unhandled AMQP client error (${ex.runtimeType}): $ex");
-              }
-
-              // Ignore exceptions while shutting down
-              if (_clientClosed != null) {
-                return;
-              }
-'''
-          if old not in source:
-              raise SystemExit('client error-normalization patch target not found')
-          client.write_text(source.replace(old, new, 1))
-
-          package = Path('packages/podbus_rabbitmq/pubspec.yaml')
-          source = package.read_text()
-          old = '  dart_amqp: ^0.3.1\n'
-          new = '  dart_amqp:\n    path: ../../third_party/dart_amqp\n'
-          if old not in source:
-              raise SystemExit('podbus_rabbitmq dependency target not found')
-          package.write_text(source.replace(old, new, 1))
-
-          root = Path('pubspec.yaml')
-          source = root.read_text()
-          marker = '  - examples/plain_dart_service\n'
-          replacement = marker + '  - third_party/dart_amqp\n'
-          if marker not in source:
-              raise SystemExit('workspace insertion target not found')
-          root.write_text(source.replace(marker, replacement, 1))
-
-          vendor_pubspec = Path('third_party/dart_amqp/pubspec.yaml')
-          source = vendor_pubspec.read_text()
-          source = source.replace(
-              'environment:\n  sdk: ">=2.12.0 <4.0.0"\n',
-              'environment:\n  sdk: ^3.12.0\n\nresolution: workspace\n',
-              1,
-          )
-          vendor_pubspec.write_text(source)
-
-          Path('third_party/dart_amqp/PODBUS_PATCHES.md').write_text('''# PodBus patches for dart_amqp
-
-Upstream: https://github.com/achilleasa/dart_amqp
-
-Pinned commit: `577c34cead6c559eec3cda0bf002c45b19f8500b` (`0.3.1`).
-
-PodBus carries two narrow compatibility fixes:
-
-1. Publisher multi-ack handling snapshots matching sequence numbers before mutating `_pendingDeliveries`, and removes `pendingSeqNo` instead of repeatedly removing the aggregate `seqNo`.
-2. Internal non-`Exception` errors are normalized before being emitted through the package's `StreamController<Exception>`.
-
-The vendored copy is temporary. Replace it with an upstream release once equivalent fixes are published and the RabbitMQ stress qualification passes against that release.
-''')
-          PY
-      - name: Resolve workspace
-        run: dart pub get
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            third_party/dart_amqp \
+            packages/podbus_rabbitmq/pubspec.yaml \
+            pubspec.yaml pubspec.lock
+          if git diff --cached --quiet; then
+            echo "Vendored patch is already current."
+          else
+            git commit -m "Patch dart_amqp publisher confirmations"
+            git push origin HEAD:fix/rabbitmq-publisher-lanes
+          fi
       - name: Validate patched dependency and PodBus adapter
         run: |
           dart format --output=none --set-exit-if-changed \
             packages/podbus_rabbitmq \
             tool/stress_transports.dart
           dart analyze packages/podbus_rabbitmq
-          dart test packages/podbus_rabbitmq/test --exclude-tags=integration --reporter=expanded
-          dart test third_party/dart_amqp/test --reporter=expanded
+          dart test packages/podbus_rabbitmq/test \
+            --exclude-tags=integration --reporter=expanded
       - name: Start clean RabbitMQ
         run: bash tool/ci/start_integration_services.sh rabbitmq
       - name: Wait for RabbitMQ
         run: bash tool/ci/wait_for_rabbitmq.sh
-      - name: Run RabbitMQ integration suite
-        run: >-
-          dart test packages/podbus_rabbitmq/test/rabbitmq_integration_test.dart
-          --tags=integration --reporter=expanded
+      - name: Run upstream and PodBus integration suites
+        run: |
+          dart test third_party/dart_amqp/test --reporter=expanded
+          dart test packages/podbus_rabbitmq/test/rabbitmq_integration_test.dart \
+            --tags=integration --reporter=expanded
       - name: Run concurrent publisher-confirm regression stress
         env:
           PODBUS_STRESS_MESSAGES: "100000"
@@ -216,15 +126,3 @@ The vendored copy is temporary. Replace it with an upstream release once equival
       - name: Stop RabbitMQ
         if: always()
         run: docker compose -f docker-compose.integration.yaml down -v --remove-orphans
-      - name: Commit validated vendored patch
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            third_party/dart_amqp \
-            packages/podbus_rabbitmq/pubspec.yaml \
-            pubspec.yaml pubspec.lock
-          git commit -m "Patch dart_amqp publisher confirmations"
-          git push origin HEAD:fix/rabbitmq-publisher-lanes
