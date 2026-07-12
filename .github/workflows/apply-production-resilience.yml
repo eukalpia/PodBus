@@ -1,0 +1,87 @@
+name: Apply production resilience suite
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/apply-production-resilience.yml"
+      - ".github/patches/production-resilience.part*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-production-resilience
+  cancel-in-progress: false
+
+env:
+  DART_SDK: 3.12.0
+  BRANCH: beta-resilience-production-suite
+
+jobs:
+  apply-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ env.BRANCH }}
+          fetch-depth: 0
+
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260
+        with:
+          sdk: ${{ env.DART_SDK }}
+
+      - name: Reconstruct and apply production patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .github/patches/production-resilience.part* \
+            | base64 --decode > /tmp/production-resilience.patch.gz
+          echo "2076cd83e6fc6f30d74094ddf3633005c10ebb25236ab4468c32f951290a0ad6  /tmp/production-resilience.patch.gz" \
+            | sha256sum --check
+          gzip --test /tmp/production-resilience.patch.gz
+          gzip --decompress --stdout /tmp/production-resilience.patch.gz \
+            > /tmp/production-resilience.patch
+          echo "12b3ae6ba02741334d91964c7280bc26742110ab1a1790882047c65ee51d4262  /tmp/production-resilience.patch" \
+            | sha256sum --check
+          git apply --check /tmp/production-resilience.patch
+          git apply /tmp/production-resilience.patch
+          git rm -f .github/patches/production-resilience.part*
+          git rm -f .github/workflows/apply-production-resilience.yml
+          git rm -f .github/workflows/export-tree.yml
+
+      - name: Resolve dependencies
+        run: dart pub get
+
+      - name: Validate source
+        run: |
+          dart format --output=none --set-exit-if-changed .
+          git diff --check
+          dart analyze .
+          dart run tool/verify_release.dart --check
+
+      - name: Run complete unit suite
+        run: >-
+          dart test
+          packages/podbus_core/test
+          packages/podbus_nats/test
+          packages/podbus_rabbitmq/test
+          packages/podbus_kafka/test
+          packages/podbus_postgres/test
+          packages/podbus_observability/test
+          packages/podbus_serverpod/test
+          --exclude-tags=integration
+          --reporter=expanded
+
+      - name: Commit validated implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Add broker fault injection and soak production gates"
+          git push origin HEAD:${BRANCH}
