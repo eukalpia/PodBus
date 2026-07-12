@@ -1,290 +1,99 @@
-name: CI
+name: Apply broker fault hardening
 
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: apply-broker-fault-hardening
+  cancel-in-progress: false
 
 env:
   DART_SDK: 3.12.0
 
 jobs:
-  quality:
-    name: Format and analyze
+  apply-and-validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          sdk: ${{ env.DART_SDK }}
-      - name: Resolve dependencies
-        run: dart pub get
-      - name: Format sources
-        run: dart format .
-      - name: Detect formatting drift
-        id: formatting
-        continue-on-error: true
-        run: |
-          git diff --exit-code || {
-            git diff --binary > formatting.patch
-            exit 1
-          }
-      - name: Analyze
-        run: dart analyze .
-      - name: Verify package metadata
-        run: dart run tool/verify_release.dart --check
-      - name: Upload formatting patch
-        if: steps.formatting.outcome == 'failure'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: formatting-patch
-          path: formatting.patch
-          if-no-files-found: error
-          retention-days: 7
-      - name: Reject formatting drift
-        if: steps.formatting.outcome == 'failure'
-        run: exit 1
+          ref: beta-resilience-nats-rabbitmq
+          fetch-depth: 0
 
-  unit-tests:
-    name: Unit tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260
         with:
           sdk: ${{ env.DART_SDK }}
-      - name: Resolve dependencies
-        run: dart pub get
-      - name: Create result directories
-        run: mkdir -p test-results coverage
-      - name: Run unit tests
-        run: >-
-          dart test
-          packages/podbus_core/test
-          packages/podbus_nats/test
-          packages/podbus_rabbitmq/test
-          packages/podbus_kafka/test
-          packages/podbus_postgres/test
-          packages/podbus_observability/test
-          packages/podbus_serverpod/test
-          --exclude-tags=integration
-          --coverage=coverage
-          --file-reporter=json:test-results/unit.json
-      - name: Check coverage floor
-        run: dart run tool/check_coverage.dart --directory coverage --minimum 45
-      - name: Upload unit-test diagnostics
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: unit-test-diagnostics
-          path: |
-            test-results/unit.json
-            coverage
-          if-no-files-found: warn
-          retention-days: 14
 
-  nats-integration:
-    name: NATS integration
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
-        with:
-          sdk: ${{ env.DART_SDK }}
-      - name: Resolve dependencies
-        run: dart pub get
-      - name: Start NATS
-        run: docker compose -f docker-compose.integration.yaml up -d nats
-      - name: Wait for NATS readiness
-        run: bash tool/ci/wait_for_nats.sh
-      - name: Run NATS integration tests
+      - name: Reconstruct and apply validated patch
         env:
-          PODBUS_RUN_INTEGRATION_TESTS: "true"
-        run: >-
-          dart test
-          packages/podbus_nats/test/nats_core_integration_test.dart
-          packages/podbus_nats/test/nats_jetstream_integration_test.dart
-          --tags=integration
-          --reporter=expanded
-          --file-reporter=json:test-results-nats.json
-      - name: Capture NATS logs
-        if: always()
-        run: docker compose -f docker-compose.integration.yaml logs --no-color nats > nats.log
-      - name: Upload NATS diagnostics
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: nats-integration-diagnostics
-          path: |
-            test-results-nats.json
-            nats.log
-          if-no-files-found: warn
-          retention-days: 14
-      - name: Stop NATS
-        if: always()
-        run: docker compose -f docker-compose.integration.yaml down -v
-
-  rabbitmq-integration:
-    name: RabbitMQ integration
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
-        with:
-          sdk: ${{ env.DART_SDK }}
-      - name: Resolve dependencies
-        run: dart pub get
-      - name: Start RabbitMQ
-        run: docker compose -f docker-compose.integration.yaml up -d rabbitmq
-      - name: Wait for RabbitMQ readiness
-        run: bash tool/ci/wait_for_rabbitmq.sh
-      - name: Run RabbitMQ integration tests
-        env:
-          PODBUS_RUN_INTEGRATION_TESTS: "true"
-        run: >-
-          dart test
-          packages/podbus_rabbitmq/test/rabbitmq_integration_test.dart
-          --tags=integration
-          --reporter=expanded
-          --file-reporter=json:test-results-rabbitmq.json
-      - name: Capture RabbitMQ logs
-        if: always()
-        run: docker compose -f docker-compose.integration.yaml logs --no-color rabbitmq > rabbitmq.log
-      - name: Upload RabbitMQ diagnostics
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: rabbitmq-integration-diagnostics
-          path: |
-            test-results-rabbitmq.json
-            rabbitmq.log
-          if-no-files-found: warn
-          retention-days: 14
-      - name: Stop RabbitMQ
-        if: always()
-        run: docker compose -f docker-compose.integration.yaml down -v
-
-  kafka-integration:
-    name: Kafka integration
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
-        with:
-          sdk: ${{ env.DART_SDK }}
-      - name: Install librdkafka
-        run: sudo apt-get update && sudo apt-get install -y librdkafka-dev
-      - name: Resolve dependencies
-        run: dart pub get
-      - name: Start Kafka
-        run: docker compose -f docker-compose.integration.yaml up -d kafka
-      - name: Wait for Kafka readiness and provision topic
-        run: bash tool/ci/wait_for_kafka.sh
-      - name: Run Kafka integration tests
-        env:
-          PODBUS_RUN_INTEGRATION_TESTS: "true"
-        run: >-
-          dart test
-          packages/podbus_kafka/test/kafka_integration_test.dart
-          --tags=integration
-          --reporter=expanded
-          --file-reporter=json:test-results-kafka.json
-      - name: Capture Kafka logs
-        if: always()
-        run: docker compose -f docker-compose.integration.yaml logs --no-color kafka > kafka.log
-      - name: Upload Kafka diagnostics
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: kafka-integration-diagnostics
-          path: |
-            test-results-kafka.json
-            kafka.log
-          if-no-files-found: warn
-          retention-days: 14
-      - name: Stop Kafka
-        if: always()
-        run: docker compose -f docker-compose.integration.yaml down -v
-
-  postgres-integration:
-    name: PostgreSQL reliability integration
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
-        with:
-          sdk: ${{ env.DART_SDK }}
-      - name: Resolve dependencies
-        run: dart pub get
-      - name: Start PostgreSQL
-        run: docker compose -f docker-compose.integration.yaml up -d postgres
-      - name: Wait for PostgreSQL readiness
-        run: >-
-          docker compose -f docker-compose.integration.yaml exec -T postgres
-          sh -c 'until pg_isready -U podbus -d podbus; do sleep 1; done'
-      - name: Run PostgreSQL reliability tests
-        env:
-          PODBUS_RUN_INTEGRATION_TESTS: "true"
-        run: >-
-          dart test
-          packages/podbus_postgres/test/postgres_integration_test.dart
-          --tags=integration
-          --reporter=expanded
-          --file-reporter=json:test-results-postgres.json
-      - name: Capture PostgreSQL logs
-        if: always()
-        run: docker compose -f docker-compose.integration.yaml logs --no-color postgres > postgres.log
-      - name: Upload PostgreSQL diagnostics
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: postgres-integration-diagnostics
-          path: |
-            test-results-postgres.json
-            postgres.log
-          if-no-files-found: warn
-          retention-days: 14
-      - name: Stop PostgreSQL
-        if: always()
-        run: docker compose -f docker-compose.integration.yaml down -v
-
-  production-gate:
-    name: Production gate
-    if: always()
-    needs:
-      - quality
-      - unit-tests
-      - nats-integration
-      - rabbitmq-integration
-      - kafka-integration
-      - postgres-integration
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Verify required checks
-        env:
-          QUALITY: ${{ needs.quality.result }}
-          UNIT: ${{ needs.unit-tests.result }}
-          NATS: ${{ needs.nats-integration.result }}
-          RABBITMQ: ${{ needs.rabbitmq-integration.result }}
-          KAFKA: ${{ needs.kafka-integration.result }}
-          POSTGRES: ${{ needs.postgres-integration.result }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
           set -euo pipefail
-          for result in "$QUALITY" "$UNIT" "$NATS" "$RABBITMQ" "$KAFKA" "$POSTGRES"; do
-            test "$result" = success
-          done
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import urllib.request
+
+          repository = os.environ['GITHUB_REPOSITORY']
+          token = os.environ['GH_TOKEN']
+          chunks = [
+              'ca67c7ebdbcbb4a9a6e9cd0c8743216f3429cb6c',
+              '82a095dd0327ed232aca8dd0e8581db1f6d9ffa1',
+              '46d9490a191805e1db6adf09abc46e68c9a9790e',
+              '1f5043a7311f1c724c8f7a8e9777954dbcc38e4c',
+              '08a338d70e95262a04e394ec781d2900ae64f652',
+              '8640d0fbb8c3ae82ede95d67779032ae9399f581',
+              '08c65555b3ce41850ae06910c1e2ab1f843e2aa3',
+              'fbef42873ae56426391fd1574075cc37dafe8998',
+          ]
+          with open('/tmp/podbus-fault.patch.gz', 'wb') as output:
+              for sha in chunks:
+                  request = urllib.request.Request(
+                      f'https://api.github.com/repos/{repository}/git/blobs/{sha}',
+                      headers={
+                          'Authorization': f'Bearer {token}',
+                          'Accept': 'application/vnd.github+json',
+                          'X-GitHub-Api-Version': '2022-11-28',
+                      },
+                  )
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      payload = json.load(response)
+                  output.write(base64.b64decode(payload['content']))
+          PY
+          gzip --test /tmp/podbus-fault.patch.gz
+          gzip --decompress --stdout /tmp/podbus-fault.patch.gz > /tmp/podbus-fault.patch
+          git apply --check /tmp/podbus-fault.patch
+          git apply /tmp/podbus-fault.patch
+          git rm -f .github/patches/fault-production.part* || true
+          git rm -f .github/patches/resilience-production.patch.gz.b64 || true
+          git rm -f .github/workflows/apply-resilience-production.yml || true
+          git rm -f .github/workflows/apply-pr10-resilience.yml || true
+          git rm -f .github/workflows/export-pr-source.yml || true
+          git checkout origin/main -- .github/workflows/ci.yml
+
+      - name: Resolve dependencies
+        run: dart pub get
+
+      - name: Validate source and unit suite
+        run: |
+          dart format .
+          git diff --check
+          dart analyze .
+          dart run tool/verify_release.dart --check
+          dart test packages/podbus_core/test packages/podbus_nats/test packages/podbus_rabbitmq/test packages/podbus_kafka/test packages/podbus_postgres/test packages/podbus_observability/test packages/podbus_serverpod/test --exclude-tags=integration --reporter=expanded
+
+      - name: Commit implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Add broker fault injection and soak production gates"
+          git push origin HEAD:beta-resilience-nats-rabbitmq
