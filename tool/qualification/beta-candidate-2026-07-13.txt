@@ -1,0 +1,17 @@
+PodBus beta-candidate qualification
+
+Requested: 2026-07-13 Asia/Tashkent
+Branch: beta-resilience-production-suite
+Baseline before marker: 35f7a4fb2adc43a3f542e36e8868dd73cac8707d
+
+Mandatory evidence for this commit:
+- complete format, analyzer, unit, coverage, compatibility, and security gates;
+- NATS, RabbitMQ, Kafka, and PostgreSQL integration suites;
+- plain Dart process deployment and graceful shutdown;
+- twelve isolated NATS and RabbitMQ broker fault scenarios;
+- 3,250,000 required NATS, JetStream, and RabbitMQ stress messages;
+- Kafka stress reported separately as experimental evidence;
+- one-hour resilience soak with zero missing acknowledged messages;
+- retained machine-readable reports and broker diagnostics.
+
+Do not describe this revision as beta-ready unless the mandatory evidence above passes for this exact commit.
