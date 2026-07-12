@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/apply-final-fault-suite.yml"
-      - ".github/patches/final-fault-suite.part00"
+      - ".github/patches/final-fault-suite.part*"
   push:
     branches: [beta-resilience-nats-rabbitmq]
     paths:
@@ -47,8 +47,8 @@ jobs:
           exec > >(tee test-results/patch-apply.log) 2>&1
           status=0
           git checkout 7b19945496bc8f0dcb27c57e57fdc0ecadb6b4f4 -- .github/workflows/ci.yml || status=$?
-          wc -c .github/patches/final-fault-suite.part00 || status=$?
-          base64 --decode .github/patches/final-fault-suite.part00 > /tmp/final-fault-suite.patch.gz || status=$?
+          wc -c .github/patches/final-fault-suite.part* || status=$?
+          cat .github/patches/final-fault-suite.part* | base64 --decode > /tmp/final-fault-suite.patch.gz || status=$?
           sha256sum /tmp/final-fault-suite.patch.gz || status=$?
           echo "abab3b41f6435d3822ddc53f8f563b360bfa089833c1115327fe1652c021c389  /tmp/final-fault-suite.patch.gz" | sha256sum --check || status=$?
           gzip --test /tmp/final-fault-suite.patch.gz || status=$?
@@ -60,7 +60,7 @@ jobs:
           fi
           if [ "$status" -eq 0 ]; then
             rm -f \
-              .github/patches/final-fault-suite.part00 \
+              .github/patches/final-fault-suite.part* \
               .github/workflows/apply-final-fault-suite.yml \
               .github/workflows/export-fault-patch.yml
             rmdir .github/patches 2>/dev/null || true
