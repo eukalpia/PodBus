@@ -80,20 +80,6 @@ replace_once(
     "podbus_rabbitmq dependency",
 )
 
-replace_once(
-    Path("pubspec.yaml"),
-    "  - examples/plain_dart_service\n",
-    "  - examples/plain_dart_service\n  - third_party/dart_amqp\n",
-    "workspace member",
-)
-
-replace_once(
-    Path("third_party/dart_amqp/pubspec.yaml"),
-    'environment:\n  sdk: ">=2.12.0 <4.0.0"\n',
-    "environment:\n  sdk: ^3.12.0\n\nresolution: workspace\n",
-    "vendored workspace metadata",
-)
-
 Path("third_party/dart_amqp/PODBUS_PATCHES.md").write_text(
     f"""# PodBus patches for dart_amqp
 
@@ -105,6 +91,8 @@ PodBus carries two narrow compatibility fixes:
 
 1. Publisher multi-ack handling snapshots matching sequence numbers before mutating `_pendingDeliveries`, and removes `pendingSeqNo` instead of repeatedly removing the aggregate `seqNo`.
 2. Internal non-`Exception` errors are normalized before being emitted through the package's `StreamController<Exception>`.
+
+The vendored package intentionally stays outside the PodBus pub workspace. Its legacy development constraints must not participate in the workspace-wide solver; PodBus consumes it only through the pinned path dependency above.
 
 The vendored copy is temporary. Replace it with an upstream release once equivalent fixes are published and the RabbitMQ stress qualification passes against that release.
 """
