@@ -49,9 +49,6 @@ jobs:
             | sha256sum --check
           git apply --check /tmp/production-resilience.patch
           git apply /tmp/production-resilience.patch
-          git rm -f .github/patches/production-resilience.part*
-          git rm -f .github/workflows/apply-production-resilience.yml
-          git rm -f .github/workflows/export-tree.yml || true
 
       - name: Resolve dependencies
         run: dart pub get
@@ -76,12 +73,13 @@ jobs:
           --exclude-tags=integration
           --reporter=expanded
 
-      - name: Commit validated implementation
+      - name: Commit validated code without workflow mutations
         shell: bash
         run: |
           set -euo pipefail
+          git restore --source=HEAD --staged --worktree .github/workflows .github/patches
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "Add broker fault injection and soak production gates"
+          git add packages tool docker-compose.integration.yaml docs/beta-resilience-validation.md
+          git commit -m "Add production broker resilience implementation"
           git push origin HEAD:${BRANCH}
