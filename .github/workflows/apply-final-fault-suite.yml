@@ -38,26 +38,54 @@ jobs:
           sdk: ${{ env.DART_SDK }}
 
       - name: Reconstruct and apply final patch
+        id: patch
+        continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
-          git checkout 7b19945496bc8f0dcb27c57e57fdc0ecadb6b4f4 -- .github/workflows/ci.yml
-          cat .github/patches/final-fault-suite.part00 | base64 --decode > /tmp/final-fault-suite.patch.gz
-          echo "abab3b41f6435d3822ddc53f8f563b360bfa089833c1115327fe1652c021c389  /tmp/final-fault-suite.patch.gz" | sha256sum --check
-          gzip --test /tmp/final-fault-suite.patch.gz
-          gzip --decompress --stdout /tmp/final-fault-suite.patch.gz > /tmp/final-fault-suite.patch
-          git apply --check /tmp/final-fault-suite.patch
-          git apply /tmp/final-fault-suite.patch
-          rm -f \
-            .github/patches/final-fault-suite.part00 \
-            .github/workflows/apply-final-fault-suite.yml \
-            .github/workflows/export-fault-patch.yml
-          rmdir .github/patches 2>/dev/null || true
+          set -uo pipefail
+          mkdir -p test-results
+          exec > >(tee test-results/patch-apply.log) 2>&1
+          status=0
+          git checkout 7b19945496bc8f0dcb27c57e57fdc0ecadb6b4f4 -- .github/workflows/ci.yml || status=$?
+          wc -c .github/patches/final-fault-suite.part00 || status=$?
+          base64 --decode .github/patches/final-fault-suite.part00 > /tmp/final-fault-suite.patch.gz || status=$?
+          sha256sum /tmp/final-fault-suite.patch.gz || status=$?
+          echo "abab3b41f6435d3822ddc53f8f563b360bfa089833c1115327fe1652c021c389  /tmp/final-fault-suite.patch.gz" | sha256sum --check || status=$?
+          gzip --test /tmp/final-fault-suite.patch.gz || status=$?
+          gzip --decompress --stdout /tmp/final-fault-suite.patch.gz > /tmp/final-fault-suite.patch || status=$?
+          wc -c /tmp/final-fault-suite.patch || status=$?
+          git apply --check /tmp/final-fault-suite.patch || status=$?
+          if [ "$status" -eq 0 ]; then
+            git apply /tmp/final-fault-suite.patch || status=$?
+          fi
+          if [ "$status" -eq 0 ]; then
+            rm -f \
+              .github/patches/final-fault-suite.part00 \
+              .github/workflows/apply-final-fault-suite.yml \
+              .github/workflows/export-fault-patch.yml
+            rmdir .github/patches 2>/dev/null || true
+          fi
+          exit "$status"
+
+      - name: Upload patch diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: final-fault-patch-diagnostics
+          path: test-results/patch-apply.log
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Require patch application
+        if: steps.patch.outcome != 'success'
+        run: exit 1
 
       - name: Resolve dependencies
+        if: steps.patch.outcome == 'success'
         run: dart pub get
 
       - name: Validate source and unit suites
+        if: steps.patch.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
@@ -76,21 +104,25 @@ jobs:
             --reporter=expanded
 
       - name: Start brokers and Toxiproxy
+        if: steps.patch.outcome == 'success'
         run: docker compose -f docker-compose.integration.yaml up -d nats rabbitmq toxiproxy
 
       - name: Wait for fault infrastructure
+        if: steps.patch.outcome == 'success'
         run: |
           bash tool/ci/wait_for_nats.sh
           bash tool/ci/wait_for_rabbitmq.sh
           bash tool/ci/wait_for_toxiproxy.sh
 
       - name: Run broker-backed smoke suite
+        if: steps.patch.outcome == 'success'
         run: >-
           dart run tool/fault_suite.dart
           --profile=smoke
           --report=test-results/apply-fault-suite.json
 
       - name: Run short fault soak
+        if: steps.patch.outcome == 'success'
         run: >-
           dart run tool/soak_resilience.dart
           --duration=30s
@@ -120,6 +152,7 @@ jobs:
         run: docker compose -f docker-compose.integration.yaml down -v
 
       - name: Commit validated implementation
+        if: steps.patch.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
