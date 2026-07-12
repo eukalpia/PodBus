@@ -1,0 +1,67 @@
+name: Fix resilience CI
+
+on:
+  push:
+    branches: [beta-resilience-nats-rabbitmq]
+    paths:
+      - ".github/workflows/fix-resilience-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  DART_SDK: 3.12.0
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: beta-resilience-nats-rabbitmq
+          fetch-depth: 0
+
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260
+        with:
+          sdk: ${{ env.DART_SDK }}
+
+      - name: Apply analyzer fixes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('packages/podbus_core/lib/src/resilience.dart')
+          text = path.read_text()
+          text = text.replace("import 'message_context.dart';\n", '')
+          text = text.replace("assert(!initialDelay.isNegative),", "assert(initialDelay >= Duration.zero),")
+          text = text.replace("assert(!maxDelay.isNegative),", "assert(maxDelay >= Duration.zero),")
+          path.write_text(text)
+          PY
+          dart format packages/podbus_core/lib/src/resilience.dart
+
+      - name: Resolve dependencies
+        run: dart pub get
+
+      - name: Analyze
+        run: dart analyze
+
+      - name: Run focused resilience tests
+        run: |
+          dart test packages/podbus_core/test/resilience_test.dart --reporter expanded
+          dart test packages/podbus_nats/test/nats_resilience_test.dart --reporter expanded
+          dart test packages/podbus_rabbitmq/test/rabbitmq_resilience_test.dart --reporter expanded
+
+      - name: Run all non-integration tests
+        run: dart test --exclude-tags=integration --reporter expanded
+
+      - name: Commit fixes
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/fix-resilience-ci.yml
+          git add packages/podbus_core/lib/src/resilience.dart
+          git commit -m "Fix resilience analyzer errors and validate tests"
+          git push origin HEAD:beta-resilience-nats-rabbitmq
