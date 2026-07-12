@@ -317,9 +317,7 @@ final class DartRabbitMqAdapter implements RabbitMqAdapter {
       );
     }
 
-    final lane = _publisherLanes[
-      _nextPublisherLane % _publisherLanes.length
-    ];
+    final lane = _publisherLanes[_nextPublisherLane % _publisherLanes.length];
     _nextPublisherLane += 1;
     final epoch = _publishEpoch;
 
@@ -435,7 +433,10 @@ final class DartRabbitMqAdapter implements RabbitMqAdapter {
     }
   }
 
-  void _handleLaneError(_PublisherLane lane, MessagingConnectionException error) {
+  void _handleLaneError(
+    _PublisherLane lane,
+    MessagingConnectionException error,
+  ) {
     final publishId = lane.pendingPublishId;
     if (publishId != null) {
       final pending = _pendingPublishes.remove(publishId);
