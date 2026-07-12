@@ -1,0 +1,21 @@
+name: Export branch tree
+
+on:
+  push:
+    branches: [beta-resilience-production-suite]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tree:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+      - name: Print tree
+        run: |
+          echo "COMMIT_SHA=$(git rev-parse HEAD)"
+          echo "TREE_SHA=$(git rev-parse HEAD^{tree})"
