@@ -54,7 +54,9 @@ Future<void> main() async {
     handler: (_, payload) async {
       final id = payload['id'];
       if (id is! String || id.isEmpty) {
-        throw const FormatException('Plain Dart smoke job requires a string id.');
+        throw const FormatException(
+          'Plain Dart smoke job requires a string id.',
+        );
       }
       processed.add(id);
       stdout.writeln(jsonEncode({'event': 'processed', 'id': id}));
