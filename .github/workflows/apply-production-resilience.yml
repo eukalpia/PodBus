@@ -51,7 +51,7 @@ jobs:
           git apply /tmp/production-resilience.patch
           git rm -f .github/patches/production-resilience.part*
           git rm -f .github/workflows/apply-production-resilience.yml
-          git rm -f .github/workflows/export-tree.yml
+          git rm -f .github/workflows/export-tree.yml || true
 
       - name: Resolve dependencies
         run: dart pub get
