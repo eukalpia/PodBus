@@ -39,13 +39,13 @@ jobs:
             service: rabbitmq
             readiness: tool/ci/wait_for_rabbitmq.sh
             tests: packages/podbus_rabbitmq/test/rabbitmq_integration_test.dart
-          - name: Kafka
+          - name: Kafka experimental
             service: kafka
             readiness: tool/ci/wait_for_kafka.sh
             tests: packages/podbus_kafka/test/kafka_integration_test.dart
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260
         with:
           sdk: ${{ env.DART_SDK }}
       - name: Install Kafka native dependency
@@ -53,8 +53,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y librdkafka-dev
       - name: Resolve dependencies
         run: dart pub get
-      - name: Start broker
-        run: docker compose -f docker-compose.integration.yaml up -d ${{ matrix.service }}
+      - name: Start clean broker
+        run: bash tool/ci/start_integration_services.sh ${{ matrix.service }}
       - name: Wait for broker readiness
         run: bash ${{ matrix.readiness }}
       - name: Run repeated integration suites
@@ -74,34 +74,44 @@ jobs:
         run: dart test ${{ matrix.tests }} --tags=integration --reporter=expanded
       - name: Capture broker logs
         if: always()
-        run: docker compose -f docker-compose.integration.yaml logs --no-color ${{ matrix.service }} > ${{ matrix.service }}-nightly.log
+        shell: bash
+        run: |
+          docker compose -f docker-compose.integration.yaml logs --no-color \
+            ${{ matrix.service }} > ${{ matrix.service }}-nightly.log 2>&1 || true
+          if [[ "${{ matrix.service }}" == "rabbitmq" ]]; then
+            docker compose -f docker-compose.integration.yaml logs --no-color rabbitmq-init \
+              >> ${{ matrix.service }}-nightly.log 2>&1 || true
+            bash tool/ci/capture_rabbitmq_state.sh || true
+          fi
       - name: Upload diagnostics
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: ${{ matrix.service }}-nightly-diagnostics
-          path: ${{ matrix.service }}-nightly.log
+          path: |
+            ${{ matrix.service }}-nightly.log
+            test-results
           if-no-files-found: warn
           retention-days: 30
       - name: Stop broker
         if: always()
-        run: docker compose -f docker-compose.integration.yaml down -v
+        run: docker compose -f docker-compose.integration.yaml down -v --remove-orphans
 
   stress-smoke:
     name: Transport stress smoke
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260
         with:
           sdk: ${{ env.DART_SDK }}
       - name: Install librdkafka
         run: sudo apt-get update && sudo apt-get install -y librdkafka-dev
       - name: Resolve dependencies
         run: dart pub get
-      - name: Start brokers
-        run: docker compose -f docker-compose.integration.yaml up -d nats rabbitmq kafka
+      - name: Start clean brokers
+        run: bash tool/ci/start_integration_services.sh nats rabbitmq kafka
       - name: Wait for brokers
         run: |
           bash tool/ci/wait_for_nats.sh
@@ -120,7 +130,7 @@ jobs:
         run: dart run tool/stress_transports.dart | tee stress-results.txt
       - name: Upload stress results
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: nightly-stress-results
           path: stress-results.txt
@@ -128,7 +138,7 @@ jobs:
           retention-days: 30
       - name: Capture broker logs
         if: failure()
-        run: docker compose -f docker-compose.integration.yaml logs --no-color > nightly-brokers.log
+        run: docker compose -f docker-compose.integration.yaml logs --no-color > nightly-brokers.log 2>&1 || true
       - name: Stop brokers
         if: always()
-        run: docker compose -f docker-compose.integration.yaml down -v
+        run: docker compose -f docker-compose.integration.yaml down -v --remove-orphans
