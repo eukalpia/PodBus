@@ -15,7 +15,15 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           fetch-depth: 0
-      - name: Print tree
+      - name: Write tree metadata
         run: |
-          echo "COMMIT_SHA=$(git rev-parse HEAD)"
-          echo "TREE_SHA=$(git rev-parse HEAD^{tree})"
+          mkdir -p tree-metadata
+          echo "COMMIT_SHA=$(git rev-parse HEAD)" > tree-metadata/tree.txt
+          echo "TREE_SHA=$(git rev-parse HEAD^{tree})" >> tree-metadata/tree.txt
+          cat tree-metadata/tree.txt
+      - name: Upload tree metadata
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: branch-tree-metadata
+          path: tree-metadata/tree.txt
+          retention-days: 1
