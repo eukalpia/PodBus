@@ -8,27 +8,58 @@ services:
     volumes:
       - nats-data:/data
 
+  rabbitmq-init:
+    image: rabbitmq:3.13.7-management
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-ec"]
+    environment:
+      RABBITMQ_ERLANG_COOKIE: "PODBUS_INTEGRATION_COOKIE_2026"
+    command: |
+      mkdir -p /var/lib/rabbitmq
+      find /var/lib/rabbitmq -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+      printf '%s' "$${RABBITMQ_ERLANG_COOKIE}" > /var/lib/rabbitmq/.erlang.cookie
+      chown -R rabbitmq:rabbitmq /var/lib/rabbitmq
+      chmod 700 /var/lib/rabbitmq
+      chmod 400 /var/lib/rabbitmq/.erlang.cookie
+      echo "Prepared RabbitMQ state:"
+      id rabbitmq
+      ls -lan /var/lib/rabbitmq
+      stat -c '%u:%g %a %n' /var/lib/rabbitmq /var/lib/rabbitmq/.erlang.cookie
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    restart: "no"
+
   rabbitmq:
     image: rabbitmq:3.13.7-management
     hostname: rabbitmq
+    depends_on:
+      rabbitmq-init:
+        condition: service_completed_successfully
     environment:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
+      RABBITMQ_ERLANG_COOKIE: "PODBUS_INTEGRATION_COOKIE_2026"
+      RABBITMQ_NODENAME: rabbit@rabbitmq
     ports:
       - "5672:5672"
       - "15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 2s
       timeout: 5s
-      retries: 30
+      retries: 60
+      start_period: 10s
 
   toxiproxy:
     image: ghcr.io/shopify/toxiproxy:2.12.0
     command: ["-host", "0.0.0.0"]
     depends_on:
-      - nats
-      - rabbitmq
+      nats:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
     ports:
       - "8474:8474"
       - "14222:14222"
@@ -81,3 +112,4 @@ services:
 
 volumes:
   nats-data:
+  rabbitmq-data:
