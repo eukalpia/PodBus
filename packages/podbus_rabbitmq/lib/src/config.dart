@@ -10,6 +10,7 @@ final class RabbitMqMessagingConfig {
     this.retryExchange,
     this.durable = true,
     this.prefetchCount = 10,
+    this.publisherChannelCount = 4,
     this.connectTimeout = const Duration(seconds: 5),
     this.publisherConfirmTimeout = const Duration(seconds: 5),
     this.mandatoryPublish = true,
@@ -45,6 +46,11 @@ final class RabbitMqMessagingConfig {
         'RabbitMQ prefetchCount must be greater than zero.',
       );
     }
+    if (publisherChannelCount < 1 || publisherChannelCount > 64) {
+      throw const MessagingConfigurationException(
+        'RabbitMQ publisherChannelCount must be between 1 and 64.',
+      );
+    }
     if (publisherConfirmTimeout <= Duration.zero) {
       throw const MessagingConfigurationException(
         'RabbitMQ publisherConfirmTimeout must be greater than zero.',
@@ -73,6 +79,14 @@ final class RabbitMqMessagingConfig {
   final String? retryExchange;
   final bool durable;
   final int prefetchCount;
+
+  /// Number of independent AMQP publisher channels.
+  ///
+  /// Each channel keeps at most one unconfirmed publish in flight. This avoids
+  /// ambiguous multi-ack handling in the current Dart AMQP client while still
+  /// allowing confirmed publishes to progress in parallel across lanes.
+  final int publisherChannelCount;
+
   final Duration connectTimeout;
   final Duration publisherConfirmTimeout;
   final bool mandatoryPublish;
