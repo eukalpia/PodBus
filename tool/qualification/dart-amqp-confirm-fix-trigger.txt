@@ -1,2 +1,3 @@
 Validate and apply the pinned dart_amqp publisher-confirm patch for PodBus RabbitMQ stress qualification.
 Export the complete generated source and retained validation evidence.
+Authoritative export run after superseded-run cancellation was enabled.
