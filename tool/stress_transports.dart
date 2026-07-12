@@ -385,19 +385,19 @@ Future<StressResult> _stressNatsCoreEvents(
 ) async {
   final id = _runId();
   final subject = 'podbus.stress.nats.$id';
-  final bus = NatsMessageBus(
-    config: NatsMessagingConfig(
-      servers: [Uri.parse(_env('PODBUS_NATS_URL', 'nats://localhost:4222'))],
-      connectTimeout: const Duration(seconds: 2),
-      requestTimeout: const Duration(seconds: 10),
-    ),
+  final config = NatsMessagingConfig(
+    servers: [Uri.parse(_env('PODBUS_NATS_URL', 'nats://localhost:4222'))],
+    connectTimeout: const Duration(seconds: 2),
+    requestTimeout: const Duration(seconds: 10),
   );
+  final subscriber = NatsMessageBus(config: config);
+  final publisher = NatsMessageBus(config: config);
 
-  await bus.connect();
+  await Future.wait([subscriber.connect(), publisher.connect()]);
   try {
     final received = _Counter(scenario.messages);
     for (var i = 0; i < scenario.consumers; i += 1) {
-      await bus.subscribe<Map<String, Object?>>(
+      await subscriber.subscribe<Map<String, Object?>>(
         subject,
         queueGroup: 'stress',
         handler: (_, payload) async {
@@ -410,7 +410,8 @@ Future<StressResult> _stressNatsCoreEvents(
       await _publishWindowed(
         scenario.messages,
         scenario.producers,
-        (index) => bus.publish(subject, _payload(index, scenario.payloadSize)),
+        (index) =>
+            publisher.publish(subject, _payload(index, scenario.payloadSize)),
       );
       await received.done.timeout(_eventTimeout);
     });
@@ -424,10 +425,13 @@ Future<StressResult> _stressNatsCoreEvents(
       ackMode: 'none',
       durability: 'no',
       publisherConfirms: 'no',
-      notes: 'at-most-once Core pub/sub',
+      notes: 'at-most-once Core pub/sub; isolated publish and consume sockets',
     );
   } finally {
-    await bus.close(timeout: const Duration(seconds: 5));
+    await Future.wait([
+      publisher.close(timeout: const Duration(seconds: 5)),
+      subscriber.close(timeout: const Duration(seconds: 5)),
+    ]);
   }
 }
 
@@ -438,8 +442,9 @@ Future<StressResult> _stressRabbitMqEvents(
 }) async {
   final id = _runId();
   final subject = 'podbus.stress.rabbitmq.$id';
-  final bus = RabbitMqMessageBus(
-    config: RabbitMqMessagingConfig(
+
+  RabbitMqMessagingConfig config(String connectionName) {
+    return RabbitMqMessagingConfig(
       uri: Uri.parse(
         _env('PODBUS_RABBITMQ_URL', 'amqp://guest:guest@localhost:5672'),
       ),
@@ -447,14 +452,22 @@ Future<StressResult> _stressRabbitMqEvents(
       deadLetterExchange: 'podbus.stress.dead.$id',
       durable: durable,
       prefetchCount: math.max(1, scenario.consumers),
-    ),
+      connectionName: connectionName,
+    );
+  }
+
+  final subscriber = RabbitMqMessageBus(
+    config: config('podbus-stress-consumer-$id'),
+  );
+  final publisher = RabbitMqMessageBus(
+    config: config('podbus-stress-publisher-$id'),
   );
 
-  await bus.connect();
+  await Future.wait([subscriber.connect(), publisher.connect()]);
   try {
     final received = _Counter(scenario.messages);
     for (var i = 0; i < scenario.consumers; i += 1) {
-      await bus.subscribe<Map<String, Object?>>(
+      await subscriber.subscribe<Map<String, Object?>>(
         subject,
         queueGroup: 'stress',
         handler: (_, payload) async {
@@ -467,7 +480,8 @@ Future<StressResult> _stressRabbitMqEvents(
       await _publishWindowed(
         scenario.messages,
         scenario.producers,
-        (index) => bus.publish(subject, _payload(index, scenario.payloadSize)),
+        (index) =>
+            publisher.publish(subject, _payload(index, scenario.payloadSize)),
       );
       await received.done.timeout(_eventTimeout);
     });
@@ -481,10 +495,15 @@ Future<StressResult> _stressRabbitMqEvents(
       ackMode: 'manual',
       durability: durable ? 'persistent queue/message' : 'no',
       publisherConfirms: 'AMQP confirm',
-      notes: durable ? 'publisher confirms' : 'non-persistent fast path',
+      notes: durable
+          ? 'publisher confirms; isolated publish and consume connections'
+          : 'non-persistent fast path; isolated connections',
     );
   } finally {
-    await bus.close(timeout: const Duration(seconds: 5));
+    await Future.wait([
+      publisher.close(timeout: const Duration(seconds: 5)),
+      subscriber.close(timeout: const Duration(seconds: 5)),
+    ]);
   }
 }
 
@@ -554,12 +573,6 @@ Future<StressResult> _stressNatsJetStreamJobs(
 
   await queue.connect();
   try {
-    await _enqueueJobs(
-      scenario.messages,
-      scenario.producers,
-      (index) => queue.enqueue(topic, _payload(index, scenario.payloadSize)),
-    );
-
     final received = _Counter(scenario.messages);
     final worker = await queue.worker<Map<String, Object?>>(
       topic,
@@ -571,17 +584,27 @@ Future<StressResult> _stressNatsJetStreamJobs(
       },
     );
 
-    final elapsed = await _time(() async {
-      await received.done.timeout(
-        _workerTimeout(
+    late final Duration elapsed;
+    try {
+      elapsed = await _time(() async {
+        await _enqueueJobs(
           scenario.messages,
-          scenario.handlerSleep,
-          scenario.consumers,
-        ),
-      );
-    });
+          scenario.producers,
+          (index) =>
+              queue.enqueue(topic, _payload(index, scenario.payloadSize)),
+        );
+        await received.done.timeout(
+          _workerTimeout(
+            scenario.messages,
+            scenario.handlerSleep,
+            scenario.consumers,
+          ),
+        );
+      });
+    } finally {
+      await worker.close();
+    }
 
-    await worker.close();
     return StressResult.completed(
       scenario: scenario,
       broker: options.broker,
@@ -591,7 +614,7 @@ Future<StressResult> _stressNatsJetStreamJobs(
       ackMode: 'manual',
       durability: storage == NatsJetStreamStorage.file ? 'file' : 'memory',
       publisherConfirms: 'JetStream PubAck',
-      notes: modeNote,
+      notes: '$modeNote; end-to-end enqueue and delivery',
     );
   } finally {
     await queue.close(timeout: const Duration(seconds: 5));
@@ -615,17 +638,12 @@ Future<StressResult> _stressRabbitMqJobs(
       deadLetterExchange: 'podbus.stress.jobs.dead.$id',
       durable: durable,
       prefetchCount: math.max(1, scenario.consumers),
+      connectionName: 'podbus-stress-jobs-$id',
     ),
   );
 
   await bus.connect();
   try {
-    await _enqueueJobs(
-      scenario.messages,
-      scenario.producers,
-      (index) => bus.enqueue(topic, _payload(index, scenario.payloadSize)),
-    );
-
     final received = _Counter(scenario.messages);
     final worker = await bus.worker<Map<String, Object?>>(
       topic,
@@ -636,17 +654,26 @@ Future<StressResult> _stressRabbitMqJobs(
       },
     );
 
-    final elapsed = await _time(() async {
-      await received.done.timeout(
-        _workerTimeout(
+    late final Duration elapsed;
+    try {
+      elapsed = await _time(() async {
+        await _enqueueJobs(
           scenario.messages,
-          scenario.handlerSleep,
-          scenario.consumers,
-        ),
-      );
-    });
+          scenario.producers,
+          (index) => bus.enqueue(topic, _payload(index, scenario.payloadSize)),
+        );
+        await received.done.timeout(
+          _workerTimeout(
+            scenario.messages,
+            scenario.handlerSleep,
+            scenario.consumers,
+          ),
+        );
+      });
+    } finally {
+      await worker.close();
+    }
 
-    await worker.close();
     return StressResult.completed(
       scenario: scenario,
       broker: options.broker,
@@ -656,7 +683,7 @@ Future<StressResult> _stressRabbitMqJobs(
       ackMode: 'manual',
       durability: durable ? 'persistent queue/message' : 'no',
       publisherConfirms: 'AMQP confirm',
-      notes: modeNote,
+      notes: '$modeNote; end-to-end enqueue and delivery',
     );
   } finally {
     await bus.close(timeout: const Duration(seconds: 5));
