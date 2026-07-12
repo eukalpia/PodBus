@@ -21,7 +21,8 @@ void main() {
       ];
 
       await _waitUntil(
-        () => client.channels[0].exchangeRef.publishes.length == 1 &&
+        () =>
+            client.channels[0].exchangeRef.publishes.length == 1 &&
             client.channels[1].exchangeRef.publishes.length == 1,
       );
       expect(client.channels[0].exchangeRef.publishes.length, 1);
@@ -172,8 +173,7 @@ final class _FakeClient implements amqp.Client {
 
 final class _FakeChannel implements amqp.Channel {
   final exchangeRef = _FakeExchange();
-  final _confirmations =
-      StreamController<amqp.PublishNotification>.broadcast();
+  final _confirmations = StreamController<amqp.PublishNotification>.broadcast();
   final _returns = StreamController<amqp.BasicReturnMessage>.broadcast();
   var _nextConfirmation = 0;
 
@@ -181,10 +181,7 @@ final class _FakeChannel implements amqp.Channel {
     final properties = exchangeRef.publishes[_nextConfirmation].properties;
     _nextConfirmation += 1;
     _confirmations.add(
-      _FakePublishNotification(
-        properties: properties,
-        published: published,
-      ),
+      _FakePublishNotification(properties: properties, published: published),
     );
   }
 
@@ -280,10 +277,7 @@ final class _FakeExchange implements amqp.Exchange {
     bool immediate = false,
   }) {
     publishes.add(
-      _Published(
-        message: message as Uint8List,
-        properties: properties!,
-      ),
+      _Published(message: message as Uint8List, properties: properties!),
     );
   }
 
