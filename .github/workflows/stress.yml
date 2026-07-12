@@ -206,8 +206,15 @@ jobs:
           fi
           export PODBUS_STRESS_MESSAGES="$messages"
           result="test-results/${{ matrix.name }}.md"
-          dart run tool/stress_transports.dart | tee "$result"
+          set +e
+          dart run tool/stress_transports.dart 2>&1 | tee "$result"
+          status=${PIPESTATUS[0]}
+          set -e
           cat "$result" >> "$GITHUB_STEP_SUMMARY"
+          if [[ $status -ne 0 ]]; then
+            echo "The stress harness exited with status $status." >&2
+            exit "$status"
+          fi
           if grep -Eq '\| (failed|skipped) \|' "$result"; then
             echo "The requested stress scenario did not complete successfully." >&2
             exit 1
