@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 
 import 'package:podbus_core/podbus_core.dart';
@@ -44,7 +45,6 @@ void main() {
 
     test('resilient queue recreates JetStream and restores workers', () async {
       final adapters = <_Adapter>[];
-      final queues = <NatsJetStreamJobQueue>[];
       final resilient = ResilientDurableJobQueue(
         policy: const ReconnectPolicy(
           maxAttempts: 3,
@@ -55,13 +55,11 @@ void main() {
         factory: () {
           final adapter = _Adapter();
           adapters.add(adapter);
-          final queue = NatsJetStreamJobQueue(
+          return NatsJetStreamJobQueue(
             config: _config(),
             jetStreamAdapter: adapter,
             fetchTimeout: const Duration(milliseconds: 5),
           );
-          queues.add(queue);
-          return queue;
         },
       );
 
@@ -85,7 +83,6 @@ void main() {
 
       await worker.close();
       await resilient.close();
-      expect(queues.lastClosed, isTrue);
     });
 
     test('burst processing never exceeds configured concurrency', () async {
@@ -162,10 +159,6 @@ void main() {
       await queue.close();
     });
   });
-}
-
-extension on List<NatsJetStreamJobQueue> {
-  bool get lastClosed => isNotEmpty;
 }
 
 const _timeout = Duration(seconds: 3);
@@ -251,24 +244,34 @@ final class _Adapter implements NatsJetStreamAdapter {
 }
 
 final class _Consumer implements NatsJetStreamConsumer {
-  final _controller = StreamController<_Message>.broadcast();
+  final Queue<_Message> _messages = Queue();
+  Completer<void>? _available;
 
-  void add(_Message message) => _controller.add(message);
+  void add(_Message message) {
+    _messages.addLast(message);
+    final available = _available;
+    _available = null;
+    if (available != null && !available.isCompleted) available.complete();
+  }
 
   @override
   Future<List<NatsJetStreamMessage>> fetch({
     required int batch,
     required Duration timeout,
   }) async {
-    final messages = <NatsJetStreamMessage>[];
-    for (var index = 0; index < batch; index += 1) {
+    if (_messages.isEmpty) {
+      final available = _available ??= Completer<void>();
       try {
-        messages.add(await _controller.stream.first.timeout(timeout));
+        await available.future.timeout(timeout);
       } on TimeoutException {
-        break;
+        return const [];
       }
     }
-    return messages;
+    final result = <NatsJetStreamMessage>[];
+    while (result.length < batch && _messages.isNotEmpty) {
+      result.add(_messages.removeFirst());
+    }
+    return result;
   }
 }
 
