@@ -46,7 +46,22 @@ jobs:
       - name: Resolve dependencies
         run: dart pub get
       - name: Start brokers and Toxiproxy
-        run: docker compose -f docker-compose.integration.yaml up -d nats rabbitmq toxiproxy
+        shell: bash
+        run: |
+          set +e
+          mkdir -p test-results
+          docker compose -f docker-compose.integration.yaml config \
+            > test-results/compose-config.yaml 2>&1
+          docker compose -f docker-compose.integration.yaml up -d \
+            nats rabbitmq toxiproxy 2>&1 | tee test-results/compose-up.log
+          status=${PIPESTATUS[0]}
+          docker compose -f docker-compose.integration.yaml ps -a \
+            > test-results/compose-ps-start.txt 2>&1 || true
+          if [[ $status -ne 0 ]]; then
+            docker compose -f docker-compose.integration.yaml logs --no-color \
+              nats rabbitmq toxiproxy > test-results/compose-start-failure.log 2>&1 || true
+            exit "$status"
+          fi
       - name: Wait for services
         run: |
           bash tool/ci/wait_for_nats.sh
@@ -59,16 +74,20 @@ jobs:
           --report=test-results/fault-suite.json
       - name: Capture broker logs
         if: always()
-        run: >-
-          docker compose -f docker-compose.integration.yaml logs --no-color
-          nats rabbitmq toxiproxy > test-results/fault-brokers.log
+        shell: bash
+        run: |
+          mkdir -p test-results
+          docker compose -f docker-compose.integration.yaml ps -a \
+            > test-results/compose-ps-final.txt 2>&1 || true
+          docker compose -f docker-compose.integration.yaml logs --no-color \
+            nats rabbitmq toxiproxy > test-results/fault-brokers.log 2>&1 || true
       - name: Upload fault diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: broker-fault-diagnostics-${{ env.PROFILE }}
           path: test-results
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
       - name: Stop services
         if: always()
