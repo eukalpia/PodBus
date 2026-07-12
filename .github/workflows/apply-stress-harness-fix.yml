@@ -1,0 +1,335 @@
+name: Apply stress harness fix
+
+on:
+  push:
+    branches:
+      - beta-resilience-production-suite
+    paths:
+      - ".github/workflows/apply-stress-harness-fix.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-stress-harness-fix
+  cancel-in-progress: false
+
+jobs:
+  patch-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: beta-resilience-production-suite
+          fetch-depth: 0
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260
+        with:
+          sdk: 3.12.0
+      - name: Split event connections and measure durable work end to end
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('tool/stress_transports.dart')
+          source = path.read_text()
+
+          nats = r'''Future<StressResult> _stressNatsCoreEvents(
+            StressOptions options,
+            StressScenario scenario,
+          ) async {
+            final id = _runId();
+            final subject = 'podbus.stress.nats.$id';
+            final config = NatsMessagingConfig(
+              servers: [Uri.parse(_env('PODBUS_NATS_URL', 'nats://localhost:4222'))],
+              connectTimeout: const Duration(seconds: 2),
+              requestTimeout: const Duration(seconds: 10),
+            );
+            final subscriber = NatsMessageBus(config: config);
+            final publisher = NatsMessageBus(config: config);
+
+            await Future.wait([subscriber.connect(), publisher.connect()]);
+            try {
+              final received = _Counter(scenario.messages);
+              for (var i = 0; i < scenario.consumers; i += 1) {
+                await subscriber.subscribe<Map<String, Object?>>(
+                  subject,
+                  queueGroup: 'stress',
+                  handler: (_, payload) async {
+                    received.add(payload['index'] as int);
+                  },
+                );
+              }
+
+              final elapsed = await _time(() async {
+                await _publishWindowed(
+                  scenario.messages,
+                  scenario.producers,
+                  (index) => publisher.publish(
+                    subject,
+                    _payload(index, scenario.payloadSize),
+                  ),
+                );
+                await received.done.timeout(_eventTimeout);
+              });
+
+              return StressResult.completed(
+                scenario: scenario,
+                broker: options.broker,
+                machine: options.machine,
+                received: received.count,
+                elapsed: elapsed,
+                ackMode: 'none',
+                durability: 'no',
+                publisherConfirms: 'no',
+                notes: 'at-most-once Core pub/sub; isolated publish and consume sockets',
+              );
+            } finally {
+              await Future.wait([
+                publisher.close(timeout: const Duration(seconds: 5)),
+                subscriber.close(timeout: const Duration(seconds: 5)),
+              ]);
+            }
+          }
+
+          '''
+          source, count = re.subn(
+              r'Future<StressResult> _stressNatsCoreEvents\([\s\S]*?(?=Future<StressResult> _stressRabbitMqEvents)',
+              nats,
+              source,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit('failed to replace NATS Core stress function')
+
+          rabbit = r'''Future<StressResult> _stressRabbitMqEvents(
+            StressOptions options,
+            StressScenario scenario, {
+            required bool durable,
+          }) async {
+            final id = _runId();
+            final subject = 'podbus.stress.rabbitmq.$id';
+            RabbitMqMessagingConfig config(String connectionName) {
+              return RabbitMqMessagingConfig(
+                uri: Uri.parse(
+                  _env('PODBUS_RABBITMQ_URL', 'amqp://guest:guest@localhost:5672'),
+                ),
+                exchange: 'podbus.stress.events.$id',
+                deadLetterExchange: 'podbus.stress.dead.$id',
+                durable: durable,
+                prefetchCount: math.max(1, scenario.consumers),
+                connectionName: connectionName,
+              );
+            }
+
+            final subscriber = RabbitMqMessageBus(
+              config: config('podbus-stress-consumer-$id'),
+            );
+            final publisher = RabbitMqMessageBus(
+              config: config('podbus-stress-publisher-$id'),
+            );
+
+            await Future.wait([subscriber.connect(), publisher.connect()]);
+            try {
+              final received = _Counter(scenario.messages);
+              for (var i = 0; i < scenario.consumers; i += 1) {
+                await subscriber.subscribe<Map<String, Object?>>(
+                  subject,
+                  queueGroup: 'stress',
+                  handler: (_, payload) async {
+                    received.add(payload['index'] as int);
+                  },
+                );
+              }
+
+              final elapsed = await _time(() async {
+                await _publishWindowed(
+                  scenario.messages,
+                  scenario.producers,
+                  (index) => publisher.publish(
+                    subject,
+                    _payload(index, scenario.payloadSize),
+                  ),
+                );
+                await received.done.timeout(_eventTimeout);
+              });
+
+              return StressResult.completed(
+                scenario: scenario,
+                broker: options.broker,
+                machine: options.machine,
+                received: received.count,
+                elapsed: elapsed,
+                ackMode: 'manual',
+                durability: durable ? 'persistent queue/message' : 'no',
+                publisherConfirms: 'AMQP confirm',
+                notes: durable
+                    ? 'publisher confirms; isolated publish and consume connections'
+                    : 'non-persistent fast path; isolated connections',
+              );
+            } finally {
+              await Future.wait([
+                publisher.close(timeout: const Duration(seconds: 5)),
+                subscriber.close(timeout: const Duration(seconds: 5)),
+              ]);
+            }
+          }
+
+          '''
+          source, count = re.subn(
+              r'Future<StressResult> _stressRabbitMqEvents\([\s\S]*?(?=Future<StressResult> _stressKafkaEvents)',
+              rabbit,
+              source,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit('failed to replace RabbitMQ event stress function')
+
+          old_js = r'''    await queue.connect();
+            try {
+              await _enqueueJobs(
+                scenario.messages,
+                scenario.producers,
+                (index) => queue.enqueue(topic, _payload(index, scenario.payloadSize)),
+              );
+
+              final received = _Counter(scenario.messages);
+              final worker = await queue.worker<Map<String, Object?>>(
+                topic,
+                durableName: 'stress_workers',
+                concurrency: scenario.consumers,
+                handler: (_, payload) async {
+                  await _sleep(scenario.handlerSleep);
+                  received.add(payload['index'] as int);
+                },
+              );
+
+              final elapsed = await _time(() async {
+                await received.done.timeout('''
+          new_js = r'''    await queue.connect();
+            try {
+              final received = _Counter(scenario.messages);
+              final worker = await queue.worker<Map<String, Object?>>(
+                topic,
+                durableName: 'stress_workers',
+                concurrency: scenario.consumers,
+                handler: (_, payload) async {
+                  await _sleep(scenario.handlerSleep);
+                  received.add(payload['index'] as int);
+                },
+              );
+
+              final elapsed = await _time(() async {
+                await _enqueueJobs(
+                  scenario.messages,
+                  scenario.producers,
+                  (index) => queue.enqueue(
+                    topic,
+                    _payload(index, scenario.payloadSize),
+                  ),
+                );
+                await received.done.timeout('''
+          if old_js not in source:
+              raise SystemExit('JetStream durable stress block not found')
+          source = source.replace(old_js, new_js, 1)
+
+          old_rabbit_jobs = r'''    await bus.connect();
+            try {
+              await _enqueueJobs(
+                scenario.messages,
+                scenario.producers,
+                (index) => bus.enqueue(topic, _payload(index, scenario.payloadSize)),
+              );
+
+              final received = _Counter(scenario.messages);
+              final worker = await bus.worker<Map<String, Object?>>(
+                topic,
+                concurrency: scenario.consumers,
+                handler: (_, payload) async {
+                  await _sleep(scenario.handlerSleep);
+                  received.add(payload['index'] as int);
+                },
+              );
+
+              final elapsed = await _time(() async {
+                await received.done.timeout('''
+          new_rabbit_jobs = r'''    await bus.connect();
+            try {
+              final received = _Counter(scenario.messages);
+              final worker = await bus.worker<Map<String, Object?>>(
+                topic,
+                concurrency: scenario.consumers,
+                handler: (_, payload) async {
+                  await _sleep(scenario.handlerSleep);
+                  received.add(payload['index'] as int);
+                },
+              );
+
+              final elapsed = await _time(() async {
+                await _enqueueJobs(
+                  scenario.messages,
+                  scenario.producers,
+                  (index) => bus.enqueue(
+                    topic,
+                    _payload(index, scenario.payloadSize),
+                  ),
+                );
+                await received.done.timeout('''
+          if old_rabbit_jobs not in source:
+              raise SystemExit('RabbitMQ durable stress block not found')
+          source = source.replace(old_rabbit_jobs, new_rabbit_jobs, 1)
+          path.write_text(source)
+
+          workflow_path = Path('.github/workflows/stress.yml')
+          workflow = workflow_path.read_text()
+          old = '''          dart run tool/stress_transports.dart | tee "$result"
+                    cat "$result" >> "$GITHUB_STEP_SUMMARY"
+                    if grep -Eq '\\| (failed|skipped) \\|' "$result"; then
+                      echo "The requested stress scenario did not complete successfully." >&2
+                      exit 1
+                    fi'''
+          new = '''          set +e
+                    dart run tool/stress_transports.dart 2>&1 | tee "$result"
+                    status=${PIPESTATUS[0]}
+                    set -e
+                    cat "$result" >> "$GITHUB_STEP_SUMMARY"
+                    if [[ $status -ne 0 ]]; then
+                      echo "The stress harness exited with status $status." >&2
+                      exit "$status"
+                    fi
+                    if grep -Eq '\\| (failed|skipped) \\|' "$result"; then
+                      echo "The requested stress scenario did not complete successfully." >&2
+                      exit 1
+                    fi'''
+          if old not in workflow:
+              raise SystemExit('stress workflow command block not found')
+          workflow_path.write_text(workflow.replace(old, new, 1))
+          PY
+      - name: Resolve dependencies
+        run: dart pub get
+      - name: Format and analyze
+        run: |
+          dart format tool/stress_transports.dart
+          dart analyze tool/stress_transports.dart
+      - name: Run stress harness configuration smoke
+        env:
+          PODBUS_STRESS_MESSAGES: "10"
+          PODBUS_STRESS_MODES: fast
+          PODBUS_STRESS_TRANSPORTS: nats
+          PODBUS_STRESS_PAYLOAD_SIZES: "32"
+          PODBUS_STRESS_CONSUMERS: "1"
+          PODBUS_STRESS_PRODUCERS: "1"
+        run: dart run tool/stress_transports.dart --help >/dev/null
+      - name: Commit validated harness and remove one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/apply-stress-harness-fix.yml
+          git add tool/stress_transports.dart .github/workflows/stress.yml
+          git commit -m "Make large stress tests end-to-end"
+          git push origin HEAD:beta-resilience-production-suite
