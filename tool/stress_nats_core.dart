@@ -6,6 +6,8 @@ import 'dart:typed_data';
 import 'package:podbus_core/podbus_core.dart';
 import 'package:podbus_nats/podbus_nats.dart';
 
+final _paddingCache = <int, String>{0: ''};
+
 Future<void> main() async {
   final messages = _positiveInt('PODBUS_STRESS_MESSAGES', 1000000);
   final producers = _positiveInt('PODBUS_STRESS_PRODUCERS', 32);
@@ -156,10 +158,17 @@ Future<void> main() async {
 Map<String, Object?> _payload(int index, int payloadSize) {
   final prefix = '$index:';
   final paddingLength = payloadSize - prefix.length;
-  final padding = paddingLength > 0
-      ? List<String>.filled(paddingLength, 'x').join()
-      : '';
-  return {'index': index, 'payload': '$prefix$padding'};
+  return {'index': index, 'payload': '$prefix${_padding(paddingLength)}'};
+}
+
+String _padding(int length) {
+  if (length <= 0) {
+    return '';
+  }
+  return _paddingCache.putIfAbsent(length, () {
+    final bytes = Uint8List(length)..fillRange(0, length, 0x78);
+    return String.fromCharCodes(bytes);
+  });
 }
 
 Future<void> _closeQuietly(Future<void> Function() close) async {
