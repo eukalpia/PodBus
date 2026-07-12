@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:podbus_core/podbus_core.dart';
@@ -17,74 +18,228 @@ Future<void> main() async {
   final natsUrl =
       Platform.environment['PODBUS_NATS_URL'] ?? 'nats://127.0.0.1:4222';
   final runId = DateTime.now().microsecondsSinceEpoch;
-  final subject = 'podbus.stress.nats.multi_connection.$runId';
+  final subject = 'podbus.stress.nats.isolates.$runId';
   final queueGroup = 'podbus-stress-$runId';
-  final config = NatsMessagingConfig(
-    servers: [Uri.parse(natsUrl)],
-    connectTimeout: const Duration(seconds: 2),
-    requestTimeout: const Duration(seconds: 10),
-  );
+  final events = ReceivePort();
+  final consumerIsolates = <Isolate>[];
+  final controlPorts = <int, SendPort>{};
+  final workerResults = <int, _ConsumerResult>{};
+  final ready = Completer<void>();
+  final delivered = Completer<void>();
+  final workersStopped = Completer<void>();
+  var readyCount = 0;
+  var reportedDeliveries = 0;
+  var publisherFinished = false;
+  Isolate? publisherIsolate;
 
-  final publisher = NatsMessageBus(config: config);
-  final subscribers = List<NatsMessageBus>.generate(
-    consumers,
-    (_) => NatsMessageBus(config: config),
-  );
-  final subscriptions = <Subscription>[];
-  final seen = Uint8List(messages);
-  final complete = Completer<void>();
-  var received = 0;
-  var duplicates = 0;
+  void completeError(Object error, [StackTrace? stackTrace]) {
+    for (final completer in [ready, delivered, workersStopped]) {
+      if (!completer.isCompleted) {
+        completer.completeError(error, stackTrace ?? StackTrace.current);
+      }
+    }
+  }
+
+  void maybeCompleteDelivery() {
+    if (publisherFinished &&
+        reportedDeliveries >= messages &&
+        !delivered.isCompleted) {
+      delivered.complete();
+    }
+  }
+
+  final eventSubscription = events.listen((dynamic message) {
+    if (message is List && message.length >= 2) {
+      completeError(
+        StateError('NATS stress isolate failed: ${message.first}'),
+        StackTrace.fromString(message[1].toString()),
+      );
+      return;
+    }
+    if (message is! Map<Object?, Object?>) {
+      return;
+    }
+
+    switch (message['type']) {
+      case 'ready':
+        final id = message['id']! as int;
+        controlPorts[id] = message['control']! as SendPort;
+        readyCount += 1;
+        if (readyCount == consumers && !ready.isCompleted) {
+          ready.complete();
+        }
+      case 'progress':
+        reportedDeliveries += message['delta']! as int;
+        maybeCompleteDelivery();
+      case 'publisher-done':
+        publisherFinished = true;
+        maybeCompleteDelivery();
+      case 'result':
+        final id = message['id']! as int;
+        workerResults[id] = _ConsumerResult(
+          delivered: message['delivered']! as int,
+          localDuplicates: message['duplicates']! as int,
+          bitmap: (message['bitmap']! as TransferableTypedData)
+              .materialize()
+              .asUint8List(),
+        );
+        if (workerResults.length == consumers && !workersStopped.isCompleted) {
+          workersStopped.complete();
+        }
+      case 'error':
+        completeError(
+          StateError(
+            'NATS stress ${message['role']} isolate failed: '
+            '${message['error']}',
+          ),
+          StackTrace.fromString(message['stackTrace']?.toString() ?? ''),
+        );
+    }
+  });
 
   stdout.writeln(
-    'Starting NATS Core multi-connection stress: '
-    '$messages messages, $producers producers, $consumers consumer sockets.',
+    'Starting NATS Core isolate stress: '
+    '$messages messages, $producers publisher tasks, '
+    '$consumers consumer isolates.',
   );
 
+  final stopwatch = Stopwatch();
   try {
-    await Future.wait([
-      publisher.connect(),
-      for (final subscriber in subscribers) subscriber.connect(),
-    ]);
-
-    for (final subscriber in subscribers) {
-      subscriptions.add(
-        await subscriber.subscribe<Map<String, Object?>>(
-          subject,
-          queueGroup: queueGroup,
-          handler: (_, payload) async {
-            final index = payload['index'];
-            if (index is! int || index < 0 || index >= messages) {
-              throw StateError('Received invalid stress index: $index');
-            }
-            if (seen[index] == 1) {
-              duplicates += 1;
-              return;
-            }
-            seen[index] = 1;
-            received += 1;
-            if (received == messages && !complete.isCompleted) {
-              complete.complete();
-            }
+    for (var id = 0; id < consumers; id += 1) {
+      consumerIsolates.add(
+        await Isolate.spawn<Map<String, Object?>>(
+          _consumerIsolateMain,
+          {
+            'events': events.sendPort,
+            'id': id,
+            'natsUrl': natsUrl,
+            'subject': subject,
+            'queueGroup': queueGroup,
+            'messages': messages,
           },
+          onError: events.sendPort,
+          errorsAreFatal: true,
+          debugName: 'podbus-nats-consumer-$id',
         ),
       );
     }
 
-    final readiness = await Future.wait([
-      for (final subscriber in subscribers) subscriber.healthCheck(),
-    ]);
-    final unhealthy = readiness.where(
-      (result) => result.status == HealthStatus.unhealthy,
+    await ready.future.timeout(const Duration(seconds: 30));
+    stopwatch.start();
+
+    publisherIsolate = await Isolate.spawn<Map<String, Object?>>(
+      _publisherIsolateMain,
+      {
+        'events': events.sendPort,
+        'natsUrl': natsUrl,
+        'subject': subject,
+        'messages': messages,
+        'producers': producers,
+        'payloadSize': payloadSize,
+      },
+      onError: events.sendPort,
+      errorsAreFatal: true,
+      debugName: 'podbus-nats-publisher',
     );
-    if (unhealthy.isNotEmpty) {
+
+    await delivered.future.timeout(
+      const Duration(minutes: 5),
+      onTimeout: () {
+        throw TimeoutException(
+          'NATS Core reported $reportedDeliveries/$messages deliveries '
+          'across $consumers consumer isolates.',
+        );
+      },
+    );
+
+    for (final control in controlPorts.values) {
+      control.send('stop');
+    }
+    await workersStopped.future.timeout(const Duration(seconds: 30));
+    stopwatch.stop();
+
+    final union = Uint8List(messages);
+    var unique = 0;
+    var duplicates = 0;
+    var totalDeliveries = 0;
+    for (final result in workerResults.values) {
+      totalDeliveries += result.delivered;
+      duplicates += result.localDuplicates;
+      for (var index = 0; index < messages; index += 1) {
+        if (result.bitmap[index] == 0) {
+          continue;
+        }
+        if (union[index] == 1) {
+          duplicates += 1;
+          continue;
+        }
+        union[index] = 1;
+        unique += 1;
+      }
+    }
+
+    if (unique != messages) {
       throw StateError(
-        'NATS subscriptions did not become ready: '
-        '${unhealthy.map((result) => result.message).join('; ')}',
+        'NATS Core delivered $unique/$messages unique messages '
+        '($totalDeliveries total deliveries, $duplicates duplicates).',
       );
     }
 
-    final stopwatch = Stopwatch()..start();
+    final elapsedSeconds = stopwatch.elapsedMicroseconds / 1000000;
+    final throughput = messages / elapsedSeconds;
+    final evidence = <String, Object?>{
+      'transport': 'nats-core',
+      'broker': broker,
+      'messages': messages,
+      'received': totalDeliveries,
+      'unique': unique,
+      'duplicates': duplicates,
+      'publisherTasks': producers,
+      'consumerIsolates': consumers,
+      'payloadBytes': payloadSize,
+      'elapsedMs': stopwatch.elapsedMilliseconds,
+      'throughputMessagesPerSecond': throughput,
+      'delivery': 'at-most-once',
+    };
+
+    stdout.writeln();
+    stdout.writeln(
+      '| Transport | Mode | Messages | Unique | Elapsed | Throughput | Status |',
+    );
+    stdout.writeln('| --- | --- | ---: | ---: | ---: | ---: | --- |');
+    stdout.writeln(
+      '| NATS Core | isolated queue-group consumers | $messages | $unique | '
+      '${stopwatch.elapsedMilliseconds} ms | '
+      '${throughput.toStringAsFixed(1)} msg/s | completed |',
+    );
+    stdout.writeln();
+    stdout.writeln('```json');
+    stdout.writeln(const JsonEncoder.withIndent('  ').convert(evidence));
+    stdout.writeln('```');
+  } finally {
+    for (final control in controlPorts.values) {
+      control.send('stop');
+    }
+    publisherIsolate?.kill(priority: Isolate.immediate);
+    for (final isolate in consumerIsolates) {
+      isolate.kill(priority: Isolate.immediate);
+    }
+    await eventSubscription.cancel();
+    events.close();
+  }
+}
+
+Future<void> _publisherIsolateMain(Map<String, Object?> arguments) async {
+  final events = arguments['events']! as SendPort;
+  final natsUrl = arguments['natsUrl']! as String;
+  final subject = arguments['subject']! as String;
+  final messages = arguments['messages']! as int;
+  final producers = arguments['producers']! as int;
+  final payloadSize = arguments['payloadSize']! as int;
+  final bus = NatsMessageBus(config: _natsConfig(natsUrl));
+
+  try {
+    await bus.connect();
     var nextIndex = 0;
 
     Future<void> publishWorker() async {
@@ -94,65 +249,123 @@ Future<void> main() async {
         if (index >= messages) {
           return;
         }
-        await publisher.publish(subject, _payload(index, payloadSize));
+        await bus.publish(subject, _payload(index, payloadSize));
       }
     }
 
     await Future.wait(List.generate(producers, (_) => publishWorker()));
-    await complete.future.timeout(
-      const Duration(minutes: 5),
-      onTimeout: () {
-        throw TimeoutException(
-          'NATS Core delivered $received/$messages unique messages '
-          'across $consumers consumer connections.',
-        );
+    final health = await bus.healthCheck();
+    if (health.status == HealthStatus.unhealthy) {
+      throw StateError('NATS publisher flush failed: ${health.message}');
+    }
+    events.send({'type': 'publisher-done'});
+  } on Object catch (error, stackTrace) {
+    events.send({
+      'type': 'error',
+      'role': 'publisher',
+      'error': error.toString(),
+      'stackTrace': stackTrace.toString(),
+    });
+  } finally {
+    await _closeQuietly(() => bus.close(timeout: const Duration(seconds: 5)));
+  }
+}
+
+Future<void> _consumerIsolateMain(Map<String, Object?> arguments) async {
+  final events = arguments['events']! as SendPort;
+  final id = arguments['id']! as int;
+  final natsUrl = arguments['natsUrl']! as String;
+  final subject = arguments['subject']! as String;
+  final queueGroup = arguments['queueGroup']! as String;
+  final messages = arguments['messages']! as int;
+  final control = ReceivePort();
+  final stopped = Completer<void>();
+  final bitmap = Uint8List(messages);
+  final bus = NatsMessageBus(config: _natsConfig(natsUrl));
+  Subscription? subscription;
+  Timer? progressTimer;
+  var delivered = 0;
+  var duplicates = 0;
+  var unreported = 0;
+
+  void flushProgress() {
+    if (unreported == 0) {
+      return;
+    }
+    events.send({'type': 'progress', 'id': id, 'delta': unreported});
+    unreported = 0;
+  }
+
+  final controlSubscription = control.listen((dynamic command) {
+    if (command == 'stop' && !stopped.isCompleted) {
+      stopped.complete();
+    }
+  });
+
+  try {
+    await bus.connect();
+    subscription = await bus.subscribe<Map<String, Object?>>(
+      subject,
+      queueGroup: queueGroup,
+      handler: (_, payload) async {
+        final index = payload['index'];
+        if (index is! int || index < 0 || index >= messages) {
+          throw StateError('Received invalid stress index: $index');
+        }
+        delivered += 1;
+        unreported += 1;
+        if (bitmap[index] == 1) {
+          duplicates += 1;
+        } else {
+          bitmap[index] = 1;
+        }
       },
     );
-    stopwatch.stop();
+    final health = await bus.healthCheck();
+    if (health.status == HealthStatus.unhealthy) {
+      throw StateError('NATS consumer $id flush failed: ${health.message}');
+    }
 
-    final elapsedSeconds = stopwatch.elapsedMicroseconds / 1000000;
-    final throughput = messages / elapsedSeconds;
-    final evidence = <String, Object?>{
-      'transport': 'nats-core',
-      'broker': broker,
-      'messages': messages,
-      'received': received,
+    progressTimer = Timer.periodic(
+      const Duration(milliseconds: 100),
+      (_) => flushProgress(),
+    );
+    events.send({'type': 'ready', 'id': id, 'control': control.sendPort});
+    await stopped.future;
+    flushProgress();
+    await subscription.close();
+    await bus.close(timeout: const Duration(seconds: 5));
+    events.send({
+      'type': 'result',
+      'id': id,
+      'delivered': delivered,
       'duplicates': duplicates,
-      'producers': producers,
-      'consumerConnections': consumers,
-      'payloadBytes': payloadSize,
-      'elapsedMs': stopwatch.elapsedMilliseconds,
-      'throughputMessagesPerSecond': throughput,
-      'delivery': 'at-most-once',
-    };
-
-    stdout.writeln();
-    stdout.writeln(
-      '| Transport | Mode | Messages | Received | Elapsed | Throughput | Status |',
-    );
-    stdout.writeln('| --- | --- | ---: | ---: | ---: | ---: | --- |');
-    stdout.writeln(
-      '| NATS Core | multi-connection queue group | $messages | $received | '
-      '${stopwatch.elapsedMilliseconds} ms | '
-      '${throughput.toStringAsFixed(1)} msg/s | completed |',
-    );
-    stdout.writeln();
-    stdout.writeln('```json');
-    stdout.writeln(const JsonEncoder.withIndent('  ').convert(evidence));
-    stdout.writeln('```');
+      'bitmap': TransferableTypedData.fromList([bitmap]),
+    });
+  } on Object catch (error, stackTrace) {
+    events.send({
+      'type': 'error',
+      'role': 'consumer-$id',
+      'error': error.toString(),
+      'stackTrace': stackTrace.toString(),
+    });
   } finally {
-    for (final subscription in subscriptions.reversed) {
+    progressTimer?.cancel();
+    await controlSubscription.cancel();
+    control.close();
+    if (subscription != null) {
       await _closeQuietly(subscription.close);
     }
-    await _closeQuietly(
-      () => publisher.close(timeout: const Duration(seconds: 5)),
-    );
-    for (final subscriber in subscribers) {
-      await _closeQuietly(
-        () => subscriber.close(timeout: const Duration(seconds: 5)),
-      );
-    }
+    await _closeQuietly(() => bus.close(timeout: const Duration(seconds: 5)));
   }
+}
+
+NatsMessagingConfig _natsConfig(String url) {
+  return NatsMessagingConfig(
+    servers: [Uri.parse(url)],
+    connectTimeout: const Duration(seconds: 2),
+    requestTimeout: const Duration(seconds: 10),
+  );
 }
 
 Map<String, Object?> _payload(int index, int payloadSize) {
@@ -190,4 +403,16 @@ int _positiveInt(String name, int fallback) {
     throw ArgumentError.value(raw, name, 'Expected a positive integer.');
   }
   return value;
+}
+
+final class _ConsumerResult {
+  const _ConsumerResult({
+    required this.delivered,
+    required this.localDuplicates,
+    required this.bitmap,
+  });
+
+  final int delivered;
+  final int localDuplicates;
+  final Uint8List bitmap;
 }
