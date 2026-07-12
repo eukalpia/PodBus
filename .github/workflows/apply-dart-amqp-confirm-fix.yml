@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: apply-dart-amqp-confirm-fix
@@ -57,3 +57,15 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
+      - name: Publish generated commit as a temporary tag
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            third_party/dart_amqp \
+            packages/podbus_rabbitmq/pubspec.yaml \
+            pubspec.lock
+          git commit -m "Patch dart_amqp publisher confirmations"
+          git tag -f automation-dart-amqp-confirm-fix
+          git push --force origin refs/tags/automation-dart-amqp-confirm-fix
