@@ -12,7 +12,8 @@ jobs:
   tree:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Checkout pull request head
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
@@ -21,10 +22,12 @@ jobs:
           mkdir -p tree-metadata
           echo "COMMIT_SHA=$(git rev-parse HEAD)" > tree-metadata/tree.txt
           echo "TREE_SHA=$(git rev-parse HEAD^{tree})" >> tree-metadata/tree.txt
-          cat tree-metadata/tree.txt
+      - name: Export current main source
+        run: |
+          git archive --format=tar.gz --output=tree-metadata/main-source.tar.gz origin/main
       - name: Upload tree metadata
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: branch-tree-metadata
-          path: tree-metadata/tree.txt
+          path: tree-metadata
           retention-days: 1
