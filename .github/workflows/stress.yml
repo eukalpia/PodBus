@@ -45,7 +45,7 @@ jobs:
           fi
           changed="$(git diff --name-only HEAD^ HEAD)"
           printf '%s\n' "$changed"
-          if grep -Eq '^(packages/podbus_(core|nats|rabbitmq|kafka)/|tool/(stress_(transports|nats_core)|ci/(start_integration_services|capture_rabbitmq_state|wait_for_rabbitmq)|qualification/beta-candidate)|docker-compose\.integration\.yaml$|\.github/workflows/stress\.yml$)' <<< "$changed"; then
+          if grep -Eq '^(packages/podbus_(core|nats|rabbitmq|kafka)/|tool/(stress_(transports|nats_core|jetstream)|ci/(start_integration_services|capture_rabbitmq_state|wait_for_rabbitmq)|qualification/beta-candidate)|docker-compose\.integration\.yaml$|\.github/workflows/stress\.yml$)' <<< "$changed"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -209,6 +209,8 @@ jobs:
           runner=(dart run tool/stress_transports.dart)
           if [[ "${{ matrix.transport }}" == "nats" && "${{ matrix.mode }}" == "fast" ]]; then
             runner=(dart run tool/stress_nats_core.dart)
+          elif [[ "${{ matrix.transport }}" == "jetstream" ]]; then
+            runner=(dart run tool/stress_jetstream.dart)
           fi
           set +e
           "${runner[@]}" 2>&1 | tee "$result"
