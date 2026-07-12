@@ -118,25 +118,34 @@ jobs:
             --reporter=expanded
 
       - name: Start brokers and Toxiproxy
+        id: brokers
         if: steps.patch.outcome == 'success'
-        run: docker compose -f docker-compose.integration.yaml up -d nats rabbitmq toxiproxy
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          docker compose -f docker-compose.integration.yaml up -d nats rabbitmq toxiproxy 2>&1 | tee test-results/start-brokers.log
+
+      - name: Require broker startup
+        if: steps.patch.outcome == 'success' && steps.brokers.outcome != 'success'
+        run: exit 1
 
       - name: Wait for fault infrastructure
-        if: steps.patch.outcome == 'success'
+        if: steps.patch.outcome == 'success' && steps.brokers.outcome == 'success'
         run: |
           bash tool/ci/wait_for_nats.sh
           bash tool/ci/wait_for_rabbitmq.sh
           bash tool/ci/wait_for_toxiproxy.sh
 
       - name: Run broker-backed smoke suite
-        if: steps.patch.outcome == 'success'
+        if: steps.patch.outcome == 'success' && steps.brokers.outcome == 'success'
         run: >-
           dart run tool/fault_suite.dart
           --profile=smoke
           --report=test-results/apply-fault-suite.json
 
       - name: Run short fault soak
-        if: steps.patch.outcome == 'success'
+        if: steps.patch.outcome == 'success' && steps.brokers.outcome == 'success'
         run: >-
           dart run tool/soak_resilience.dart
           --duration=30s
@@ -166,7 +175,7 @@ jobs:
         run: docker compose -f docker-compose.integration.yaml down -v
 
       - name: Commit validated implementation
-        if: steps.patch.outcome == 'success'
+        if: steps.patch.outcome == 'success' && steps.brokers.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
