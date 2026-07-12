@@ -2,18 +2,6 @@ name: Broker fault injection
 
 on:
   pull_request:
-    paths:
-      - "packages/podbus_core/**"
-      - "packages/podbus_nats/**"
-      - "packages/podbus_rabbitmq/**"
-      - "tool/fault_worker.dart"
-      - "tool/fault_suite.dart"
-      - "tool/src/fault_harness.dart"
-      - "tool/ci/start_integration_services.sh"
-      - "tool/ci/capture_rabbitmq_state.sh"
-      - "tool/ci/wait_for_rabbitmq.sh"
-      - "docker-compose.integration.yaml"
-      - ".github/workflows/fault-injection.yml"
   workflow_dispatch:
     inputs:
       profile:
@@ -37,8 +25,36 @@ env:
   PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profile || 'smoke' }}
 
 jobs:
+  changes:
+    name: Detect fault-suite changes
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.detect.outputs.run }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 2
+      - id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed="$(git diff --name-only HEAD^ HEAD)"
+          printf '%s\n' "$changed"
+          if grep -Eq '^(packages/podbus_(core|nats|rabbitmq)/|tool/(fault_|src/fault_harness|ci/(start_integration_services|capture_rabbitmq_state|wait_for_rabbitmq)|qualification/beta-candidate)|docker-compose\.integration\.yaml$|\.github/workflows/fault-injection\.yml$)' <<< "$changed"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
   broker-faults:
     name: fault / ${{ matrix.scenario }}
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
