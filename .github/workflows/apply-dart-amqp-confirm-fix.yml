@@ -16,14 +16,14 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: apply-dart-amqp-confirm-fix
   cancel-in-progress: false
 
 jobs:
-  vendor-patch-test-and-commit:
+  vendor-patch-test-and-export:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -56,22 +56,17 @@ jobs:
         run: python3 tool/ci/vendor_dart_amqp_patch.py
       - name: Resolve workspace
         run: dart pub get
-      - name: Commit generated patch before validation
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            third_party/dart_amqp \
-            packages/podbus_rabbitmq/pubspec.yaml \
-            pubspec.yaml pubspec.lock
-          if git diff --cached --quiet; then
-            echo "Vendored patch is already current."
-          else
-            git commit -m "Patch dart_amqp publisher confirmations"
-            git push origin HEAD:fix/rabbitmq-publisher-lanes
-          fi
+      - name: Export complete generated source
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dart-amqp-generated-source
+          path: |
+            third_party/dart_amqp
+            packages/podbus_rabbitmq/pubspec.yaml
+            pubspec.lock
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
       - name: Validate patched dependency and PodBus adapter
         run: |
           dart format --output=none --set-exit-if-changed \
