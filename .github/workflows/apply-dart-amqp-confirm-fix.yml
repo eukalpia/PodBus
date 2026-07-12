@@ -1,13 +1,6 @@
 name: Apply dart_amqp publisher-confirm fix
 
 on:
-  push:
-    branches:
-      - fix/rabbitmq-publisher-lanes
-    paths:
-      - ".github/workflows/apply-dart-amqp-confirm-fix.yml"
-      - "tool/ci/vendor_dart_amqp_patch.py"
-      - "tool/qualification/dart-amqp-confirm-fix-trigger.txt"
   pull_request:
     paths:
       - ".github/workflows/apply-dart-amqp-confirm-fix.yml"
@@ -16,20 +9,17 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: apply-dart-amqp-confirm-fix
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
-  vendor-patch-test-and-commit:
+  export-generated-source:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    env:
-      DART_AMQP_COMMIT: 577c34cead6c559eec3cda0bf002c45b19f8500b
-      PODBUS_RUN_INTEGRATION_TESTS: "true"
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -39,13 +29,13 @@ jobs:
         with:
           sdk: 3.12.0
       - name: Vendor pinned upstream source
-        shell: bash
         run: |
           set -euo pipefail
           rm -rf third_party/dart_amqp /tmp/dart_amqp
           git clone --filter=blob:none --no-checkout \
             https://github.com/achilleasa/dart_amqp.git /tmp/dart_amqp
-          git -C /tmp/dart_amqp checkout --detach "$DART_AMQP_COMMIT"
+          git -C /tmp/dart_amqp checkout --detach \
+            577c34cead6c559eec3cda0bf002c45b19f8500b
           mkdir -p third_party/dart_amqp
           rsync -a \
             --exclude=.git \
@@ -54,75 +44,16 @@ jobs:
             /tmp/dart_amqp/ third_party/dart_amqp/
       - name: Apply reproducible PodBus patches
         run: python3 tool/ci/vendor_dart_amqp_patch.py
-      - name: Resolve workspace
+      - name: Resolve PodBus workspace
         run: dart pub get
-      - name: Commit generated patch before validation
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            third_party/dart_amqp \
-            packages/podbus_rabbitmq/pubspec.yaml \
-            pubspec.yaml pubspec.lock
-          if git diff --cached --quiet; then
-            echo "Vendored patch is already current."
-          else
-            git commit -m "Patch dart_amqp publisher confirmations"
-            git push origin HEAD:fix/rabbitmq-publisher-lanes
-          fi
-      - name: Validate patched dependency and PodBus adapter
-        run: |
-          dart format --output=none --set-exit-if-changed \
-            packages/podbus_rabbitmq \
-            tool/stress_transports.dart
-          dart analyze packages/podbus_rabbitmq
-          dart test packages/podbus_rabbitmq/test \
-            --exclude-tags=integration --reporter=expanded
-      - name: Start clean RabbitMQ
-        run: bash tool/ci/start_integration_services.sh rabbitmq
-      - name: Wait for RabbitMQ
-        run: bash tool/ci/wait_for_rabbitmq.sh
-      - name: Run upstream and PodBus integration suites
-        run: |
-          dart test third_party/dart_amqp/test --reporter=expanded
-          dart test packages/podbus_rabbitmq/test/rabbitmq_integration_test.dart \
-            --tags=integration --reporter=expanded
-      - name: Run concurrent publisher-confirm regression stress
-        env:
-          PODBUS_STRESS_MESSAGES: "100000"
-          PODBUS_STRESS_MODES: fast,durable,worker
-          PODBUS_STRESS_TRANSPORTS: rabbitmq
-          PODBUS_STRESS_PAYLOAD_SIZES: "256"
-          PODBUS_STRESS_CONSUMERS: "16"
-          PODBUS_STRESS_PRODUCERS: "64"
-          PODBUS_STRESS_HANDLER_SLEEP_MS: "0"
-          PODBUS_STRESS_BROKER: github-actions-dart-amqp-patch
-        run: |
-          mkdir -p test-results
-          set -o pipefail
-          dart run tool/stress_transports.dart 2>&1 \
-            | tee test-results/rabbitmq-confirm-regression.md
-          if grep -Eq '\| (failed|skipped) \|' \
-            test-results/rabbitmq-confirm-regression.md; then
-            exit 1
-          fi
-      - name: Capture RabbitMQ diagnostics
-        if: always()
-        run: |
-          mkdir -p test-results
-          docker compose -f docker-compose.integration.yaml logs --no-color \
-            rabbitmq-init rabbitmq > test-results/rabbitmq.log 2>&1 || true
-          bash tool/ci/capture_rabbitmq_state.sh || true
-      - name: Upload validation evidence
-        if: always()
+      - name: Export generated source
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: dart-amqp-confirm-fix-validation
-          path: test-results
-          if-no-files-found: warn
-          retention-days: 30
-      - name: Stop RabbitMQ
-        if: always()
-        run: docker compose -f docker-compose.integration.yaml down -v --remove-orphans
+          name: dart-amqp-generated-source
+          path: |
+            third_party/dart_amqp
+            packages/podbus_rabbitmq/pubspec.yaml
+            pubspec.lock
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
