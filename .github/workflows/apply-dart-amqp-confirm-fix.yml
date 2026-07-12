@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  export-generated-source:
+  publish-generated-source:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -46,18 +46,7 @@ jobs:
         run: python3 tool/ci/vendor_dart_amqp_patch.py
       - name: Resolve PodBus workspace
         run: dart pub get
-      - name: Export generated source
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: dart-amqp-generated-source
-          path: |
-            third_party/dart_amqp
-            packages/podbus_rabbitmq/pubspec.yaml
-            pubspec.lock
-          include-hidden-files: true
-          if-no-files-found: error
-          retention-days: 7
-      - name: Publish generated commit as a temporary tag
+      - name: Publish generated vendor commit
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -67,5 +56,4 @@ jobs:
             packages/podbus_rabbitmq/pubspec.yaml \
             pubspec.lock
           git commit -m "Patch dart_amqp publisher confirmations"
-          git tag -f automation-dart-amqp-confirm-fix
-          git push --force origin refs/tags/automation-dart-amqp-confirm-fix
+          git push origin HEAD:automation/dart-amqp-confirm-fix
