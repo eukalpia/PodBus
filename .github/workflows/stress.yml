@@ -1,0 +1,211 @@
+name: Large transport stress
+
+on:
+  pull_request:
+    paths:
+      - "packages/podbus_core/**"
+      - "packages/podbus_nats/**"
+      - "packages/podbus_rabbitmq/**"
+      - "packages/podbus_kafka/**"
+      - "tool/stress_transports.dart"
+      - "tool/ci/start_integration_services.sh"
+      - "tool/ci/capture_rabbitmq_state.sh"
+      - "docker-compose.integration.yaml"
+      - ".github/workflows/stress.yml"
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Stress scale; extreme doubles every matrix message count
+        required: true
+        default: large
+        type: choice
+        options:
+          - large
+          - extreme
+
+permissions:
+  contents: read
+
+concurrency:
+  group: large-stress-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DART_SDK: 3.12.0
+  STRESS_PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profile || 'large' }}
+
+jobs:
+  transport-stress:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        include:
+          - name: nats-core-1m
+            service: nats
+            readiness: tool/ci/wait_for_nats.sh
+            transport: nats
+            mode: fast
+            messages: 1000000
+            producers: 512
+            consumers: 8
+            payload: 256
+            fetch_batch: 1
+            kafka: false
+          - name: jetstream-durable-250k
+            service: nats
+            readiness: tool/ci/wait_for_nats.sh
+            transport: jetstream
+            mode: durable
+            messages: 250000
+            producers: 128
+            consumers: 8
+            payload: 256
+            fetch_batch: 128
+            kafka: false
+          - name: jetstream-workers-250k
+            service: nats
+            readiness: tool/ci/wait_for_nats.sh
+            transport: jetstream
+            mode: worker
+            messages: 250000
+            producers: 128
+            consumers: 16
+            payload: 256
+            fetch_batch: 128
+            kafka: false
+          - name: rabbitmq-fast-1m
+            service: rabbitmq
+            readiness: tool/ci/wait_for_rabbitmq.sh
+            transport: rabbitmq
+            mode: fast
+            messages: 1000000
+            producers: 512
+            consumers: 8
+            payload: 256
+            fetch_batch: 1
+            kafka: false
+          - name: rabbitmq-durable-500k
+            service: rabbitmq
+            readiness: tool/ci/wait_for_rabbitmq.sh
+            transport: rabbitmq
+            mode: durable
+            messages: 500000
+            producers: 256
+            consumers: 8
+            payload: 256
+            fetch_batch: 1
+            kafka: false
+          - name: rabbitmq-workers-250k
+            service: rabbitmq
+            readiness: tool/ci/wait_for_rabbitmq.sh
+            transport: rabbitmq
+            mode: worker
+            messages: 250000
+            producers: 128
+            consumers: 16
+            payload: 256
+            fetch_batch: 1
+            kafka: false
+          - name: kafka-fast-250k
+            service: kafka
+            readiness: tool/ci/wait_for_kafka.sh
+            transport: kafka
+            mode: fast
+            messages: 250000
+            producers: 128
+            consumers: 1
+            payload: 256
+            fetch_batch: 1
+            kafka: true
+          - name: kafka-durable-150k
+            service: kafka
+            readiness: tool/ci/wait_for_kafka.sh
+            transport: kafka
+            mode: durable
+            messages: 150000
+            producers: 64
+            consumers: 1
+            payload: 256
+            fetch_batch: 1
+            kafka: true
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260
+        with:
+          sdk: ${{ env.DART_SDK }}
+      - name: Install Kafka native dependency
+        if: matrix.kafka
+        run: sudo apt-get update && sudo apt-get install -y librdkafka-dev
+      - name: Resolve dependencies
+        run: dart pub get
+      - name: Record runner metadata
+        shell: bash
+        run: |
+          mkdir -p test-results
+          {
+            echo "profile=${STRESS_PROFILE}"
+            echo "dart=$(dart --version 2>&1)"
+            echo "kernel=$(uname -a)"
+            echo "cpus=$(nproc)"
+            free -h || true
+            lscpu || true
+          } > "test-results/${{ matrix.name }}-machine.txt"
+      - name: Start clean broker
+        run: bash tool/ci/start_integration_services.sh ${{ matrix.service }}
+      - name: Wait for broker readiness
+        run: bash ${{ matrix.readiness }}
+      - name: Run large stress scenario
+        shell: bash
+        env:
+          BASE_MESSAGES: ${{ matrix.messages }}
+          PODBUS_STRESS_MODES: ${{ matrix.mode }}
+          PODBUS_STRESS_TRANSPORTS: ${{ matrix.transport }}
+          PODBUS_STRESS_PAYLOAD_SIZES: ${{ matrix.payload }}
+          PODBUS_STRESS_CONSUMERS: ${{ matrix.consumers }}
+          PODBUS_STRESS_PRODUCERS: ${{ matrix.producers }}
+          PODBUS_STRESS_HANDLER_SLEEP_MS: "0"
+          PODBUS_STRESS_FAILURE_MESSAGES: "10000"
+          PODBUS_STRESS_BROKER: github-actions-${{ matrix.name }}
+          PODBUS_JETSTREAM_FETCH_BATCH_SIZE: ${{ matrix.fetch_batch }}
+        run: |
+          set -euo pipefail
+          messages="$BASE_MESSAGES"
+          if [[ "$STRESS_PROFILE" == "extreme" ]]; then
+            messages=$((messages * 2))
+          fi
+          export PODBUS_STRESS_MESSAGES="$messages"
+          result="test-results/${{ matrix.name }}.md"
+          dart run tool/stress_transports.dart | tee "$result"
+          cat "$result" >> "$GITHUB_STEP_SUMMARY"
+          if grep -Eq '\| (failed|skipped) \|' "$result"; then
+            echo "The requested stress scenario did not complete successfully." >&2
+            exit 1
+          fi
+      - name: Capture broker and resource state
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p test-results
+          docker stats --no-stream \
+            > "test-results/${{ matrix.name }}-docker-stats.txt" 2>&1 || true
+          docker compose -f docker-compose.integration.yaml logs --no-color \
+            ${{ matrix.service }} \
+            > "test-results/${{ matrix.name }}-broker.log" 2>&1 || true
+          if [[ "${{ matrix.service }}" == "rabbitmq" ]]; then
+            bash tool/ci/capture_rabbitmq_state.sh || true
+          fi
+      - name: Upload stress evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: stress-${{ matrix.name }}
+          path: test-results
+          if-no-files-found: error
+          retention-days: 90
+      - name: Stop broker
+        if: always()
+        run: docker compose -f docker-compose.integration.yaml down -v --remove-orphans
