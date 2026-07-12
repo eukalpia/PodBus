@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:podbus_core/podbus_core.dart';
 import 'package:podbus_nats/podbus_nats.dart';
 
 Future<void> main() async {
@@ -11,8 +12,8 @@ Future<void> main() async {
   final consumers = _positiveInt('PODBUS_STRESS_CONSUMERS', 16);
   final payloadSize = _positiveInt('PODBUS_STRESS_PAYLOAD_SIZES', 256);
   final broker = Platform.environment['PODBUS_STRESS_BROKER'] ?? 'local';
-  final natsUrl = Platform.environment['PODBUS_NATS_URL'] ??
-      'nats://127.0.0.1:4222';
+  final natsUrl =
+      Platform.environment['PODBUS_NATS_URL'] ?? 'nats://127.0.0.1:4222';
   final runId = DateTime.now().microsecondsSinceEpoch;
   final subject = 'podbus.stress.nats.multi_connection.$runId';
   final queueGroup = 'podbus-stress-$runId';
@@ -27,7 +28,7 @@ Future<void> main() async {
     consumers,
     (_) => NatsMessageBus(config: config),
   );
-  final subscriptions = <dynamic>[];
+  final subscriptions = <Subscription>[];
   final seen = Uint8List(messages);
   final complete = Completer<void>();
   var received = 0;
@@ -68,8 +69,7 @@ Future<void> main() async {
       );
     }
 
-    // Give every independent queue-group subscription time to reach the broker
-    // before the burst begins. The readiness delay is outside the measurement.
+    // Keep subscription readiness outside the measured interval.
     await Future<void>.delayed(const Duration(milliseconds: 250));
 
     final stopwatch = Stopwatch()..start();
@@ -82,10 +82,7 @@ Future<void> main() async {
         if (index >= messages) {
           return;
         }
-        await publisher.publish(
-          subject,
-          _payload(index, payloadSize),
-        );
+        await publisher.publish(subject, _payload(index, payloadSize));
       }
     }
 
@@ -118,7 +115,9 @@ Future<void> main() async {
     };
 
     stdout.writeln();
-    stdout.writeln('| Transport | Mode | Messages | Received | Elapsed | Throughput | Status |');
+    stdout.writeln(
+      '| Transport | Mode | Messages | Received | Elapsed | Throughput | Status |',
+    );
     stdout.writeln('| --- | --- | ---: | ---: | ---: | ---: | --- |');
     stdout.writeln(
       '| NATS Core | multi-connection queue group | $messages | $received | '
@@ -131,11 +130,15 @@ Future<void> main() async {
     stdout.writeln('```');
   } finally {
     for (final subscription in subscriptions.reversed) {
-      await subscription.close().catchError((_) {});
+      await _closeQuietly(subscription.close);
     }
-    await publisher.close(timeout: const Duration(seconds: 5)).catchError((_) {});
+    await _closeQuietly(
+      () => publisher.close(timeout: const Duration(seconds: 5)),
+    );
     for (final subscriber in subscribers) {
-      await subscriber.close(timeout: const Duration(seconds: 5)).catchError((_) {});
+      await _closeQuietly(
+        () => subscriber.close(timeout: const Duration(seconds: 5)),
+      );
     }
   }
 }
@@ -143,10 +146,18 @@ Future<void> main() async {
 Map<String, Object?> _payload(int index, int payloadSize) {
   final prefix = '$index:';
   final paddingLength = payloadSize - prefix.length;
-  return {
-    'index': index,
-    'payload': paddingLength > 0 ? prefix + ('x' * paddingLength) : prefix,
-  };
+  final padding = paddingLength > 0
+      ? List<String>.filled(paddingLength, 'x').join()
+      : '';
+  return {'index': index, 'payload': '$prefix$padding'};
+}
+
+Future<void> _closeQuietly(Future<void> Function() close) async {
+  try {
+    await close();
+  } on Object {
+    // Cleanup must not hide the stress result.
+  }
 }
 
 int _positiveInt(String name, int fallback) {
