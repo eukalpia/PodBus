@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/apply-dart-amqp-confirm-fix.yml"
+      - "tool/qualification/dart-amqp-confirm-fix-trigger.txt"
   workflow_dispatch:
 
 permissions:
