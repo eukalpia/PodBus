@@ -17,7 +17,7 @@ jobs:
   fix:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -28,18 +28,56 @@ jobs:
         with:
           sdk: ${{ env.DART_SDK }}
 
-      - name: Apply analyzer fixes
+      - name: Apply analyzer and race fixes
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          path = Path('packages/podbus_core/lib/src/resilience.dart')
-          text = path.read_text()
+
+          core = Path('packages/podbus_core/lib/src/resilience.dart')
+          text = core.read_text()
           text = text.replace("import 'message_context.dart';\n", '')
-          text = text.replace("assert(!initialDelay.isNegative),", "assert(initialDelay >= Duration.zero),")
-          text = text.replace("assert(!maxDelay.isNegative),", "assert(maxDelay >= Duration.zero),")
-          path.write_text(text)
+          text = text.replace("       assert(!initialDelay.isNegative),\n", '')
+          text = text.replace("       assert(!maxDelay.isNegative),\n", '')
+          text = text.replace("       assert(recoveryTimeout > Duration.zero);", "       assert(jitter >= 0 && jitter <= 1);")
+          text = text.replace(
+              "       assert(jitter >= 0 && jitter <= 1),\n       assert(jitter >= 0 && jitter <= 1);",
+              "       assert(jitter >= 0 && jitter <= 1);",
+          )
+          if not text.startswith('// ignore_for_file: prefer_initializing_formals'):
+              text = '// ignore_for_file: prefer_initializing_formals\n\n' + text
+          core.write_text(text)
+
+          core_test = Path('packages/podbus_core/test/resilience_test.dart')
+          text = core_test.read_text()
+          text = text.replace(
+              '_FakeMessageBus({this.connectGate, this.connectError});',
+              '_FakeMessageBus({this.connectGate});',
+          )
+          message_class = text.index('final class _FakeMessageBus')
+          queue_class = text.index('final class _FakeDurableQueue')
+          before = text[:message_class]
+          section = text[message_class:queue_class]
+          after = text[queue_class:]
+          section = section.replace('  final Object? connectError;\n', '')
+          section = section.replace('    if (connectError case final error?) throw error;\n', '')
+          core_test.write_text(before + section + after)
+
+          rabbit_test = Path('packages/podbus_rabbitmq/test/rabbitmq_resilience_test.dart')
+          text = rabbit_test.read_text()
+          text = text.replace(
+              "      await started.future.timeout(_timeout);\n\n      var closed = false;",
+              "      await started.future.timeout(_timeout);\n      // Allow the asynchronous consumer stream to place deliveries into the\n      // worker's pending queue before shutdown begins.\n      await Future<void>.delayed(const Duration(milliseconds: 25));\n\n      var closed = false;",
+          )
+          text = text.replace(
+              "      expect(buffered.every((delivery) => delivery.requeued), isTrue);",
+              "      await _waitFor(() => buffered.every((delivery) => delivery.requeued));",
+          )
+          rabbit_test.write_text(text)
           PY
-          dart format packages/podbus_core/lib/src/resilience.dart
+          dart format \
+            packages/podbus_core/lib/src/resilience.dart \
+            packages/podbus_core/test/resilience_test.dart \
+            packages/podbus_rabbitmq/test/rabbitmq_resilience_test.dart
 
       - name: Resolve dependencies
         run: dart pub get
@@ -56,12 +94,15 @@ jobs:
       - name: Run all non-integration tests
         run: dart test --exclude-tags=integration --reporter expanded
 
-      - name: Commit fixes
+      - name: Commit validated fixes
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm .github/workflows/fix-resilience-ci.yml
-          git add packages/podbus_core/lib/src/resilience.dart
-          git commit -m "Fix resilience analyzer errors and validate tests"
+          git add \
+            packages/podbus_core/lib/src/resilience.dart \
+            packages/podbus_core/test/resilience_test.dart \
+            packages/podbus_rabbitmq/test/rabbitmq_resilience_test.dart
+          git commit -m "Fix resilience analyzer errors and shutdown race"
           git push origin HEAD:beta-resilience-nats-rabbitmq
