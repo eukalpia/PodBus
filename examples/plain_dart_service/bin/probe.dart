@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:podbus_core/podbus_core.dart';
 import 'package:podbus_nats/podbus_nats.dart';
 
 const _streamName = 'PODBUS_PLAIN_DART_SERVICE';
