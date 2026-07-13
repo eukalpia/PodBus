@@ -49,6 +49,7 @@ Run `PostgresOutboxRelay.runOnce()` from a supervised loop. Give every replica a
 - Set explicit request, publish-confirm, and shutdown timeouts.
 - Give every durable consumer a stable, versioned name.
 - Use a distinct broker identity per service with the minimum subject, topic, exchange, and queue permissions.
+- Keep application publish concurrency bounded even when the transport supports concurrent confirmations.
 
 ## Transport security
 
@@ -58,6 +59,10 @@ Production broker endpoints must use encrypted connections:
 - RabbitMQ: `amqps://`, trusted certificate authorities, dedicated users, and separate virtual hosts where practical.
 - Kafka: TLS plus SASL/SCRAM or the authentication mechanism required by the cluster.
 - PostgreSQL: TLS with certificate verification; never use the integration-test credentials.
+
+NATS permissions must include only the application subjects the service needs. A service using request/reply or JetStream PubAck also needs its own `_INBOX` reply subjects. Do not grant unrelated publishers broad access to `_INBOX.>`: PodBus uses cryptographically random NATS NUIDs for PubAck inboxes, but broker ACLs remain the primary authorization boundary.
+
+For RabbitMQ, grant configure/write/read permissions only for the exchanges and queues owned by the service. Publisher-confirm lanes increase channel count, not the required routing permissions. Monitor channel totals and keep the configured lane count within broker policy.
 
 Do not implement `onBadCertificate` by returning `true` in production. That converts TLS into expensive plaintext.
 
@@ -73,7 +78,7 @@ On `SIGTERM`:
 6. close broker connections;
 7. exit before the platform termination deadline.
 
-Set the container termination grace period longer than the PodBus shutdown timeout. The Kubernetes example uses 45 seconds and a 30-second application drain budget.
+Set the container termination grace period longer than the PodBus shutdown timeout. The Kubernetes example uses 45 seconds and a 30-second application drain budget. JetStream drain is bounded by each outstanding publish-confirmation deadline; a lost PubAck must fail shutdown rather than pin the process indefinitely.
 
 ## Observability
 
@@ -107,9 +112,11 @@ A production release requires:
 
 - the `Production gate` check to pass;
 - the security and compatibility workflows to pass;
-- a successful nightly reliability run;
+- a successful large-transport qualification run;
+- all broker fault scenarios to pass without process leaks;
+- a real one-hour resilience soak to complete with no missing acknowledged messages;
 - a reviewed migration plan for wire-schema or database changes;
 - dashboards and alerts installed before traffic is enabled;
 - a rollback version that has already been exercised.
 
-See [Runbook](runbook.md), [Disaster recovery](disaster-recovery.md), and [Upgrading](upgrading.md).
+See [Beta qualification](beta-qualification.md), [Runbook](runbook.md), [Disaster recovery](disaster-recovery.md), and [Upgrading](upgrading.md).
