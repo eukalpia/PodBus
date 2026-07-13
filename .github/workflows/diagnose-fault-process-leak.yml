@@ -47,11 +47,10 @@ jobs:
           mkdir -p test-results
           report="test-results/${SCENARIO}.json"
           log="test-results/${SCENARIO}.log"
-          dart --observe=127.0.0.1:8181 --disable-service-auth-codes \
-            run tool/fault_suite.dart \
-              --profile=smoke \
-              --scenario="$SCENARIO" \
-              --report="$report" \
+          dart run tool/fault_suite.dart \
+            --profile=smoke \
+            --scenario="$SCENARIO" \
+            --report="$report" \
             >"$log" 2>&1 &
           pid=$!
           echo "$pid" > test-results/dart.pid
@@ -61,11 +60,12 @@ jobs:
             if ! kill -0 "$pid" 2>/dev/null; then break; fi
             sleep 1
           done
+          sleep 5
 
           {
             echo "pid=$pid"
             echo "report_present=$([[ -s "$report" ]] && echo yes || echo no)"
-            echo "alive_after_report=$(kill -0 "$pid" 2>/dev/null && echo yes || echo no)"
+            echo "alive_five_seconds_after_report=$(kill -0 "$pid" 2>/dev/null && echo yes || echo no)"
             echo "--- ps ---"
             ps -o pid,ppid,stat,etime,wchan:32,cmd -p "$pid" || true
             echo "--- status ---"
@@ -84,34 +84,6 @@ jobs:
             cat "/proc/$pid/net/tcp6" 2>/dev/null || true
           } > test-results/process-state.txt 2>&1
 
-          curl -fsS http://127.0.0.1:8181/getVM \
-            > test-results/vm.json 2>test-results/vm-error.txt || true
-          python3 - <<'PY'
-          import json, pathlib, urllib.request
-          vm_path = pathlib.Path('test-results/vm.json')
-          if not vm_path.exists() or not vm_path.read_text().strip():
-              raise SystemExit(0)
-          try:
-              vm = json.loads(vm_path.read_text())
-          except Exception:
-              raise SystemExit(0)
-          isolates = vm.get('result', vm).get('isolates', [])
-          for index, isolate in enumerate(isolates):
-              isolate_id = isolate.get('id')
-              if not isolate_id:
-                  continue
-              for method in ('getIsolate', 'getStack'):
-                  url = f'http://127.0.0.1:8181/{method}?isolateId={isolate_id}'
-                  try:
-                      data = urllib.request.urlopen(url, timeout=5).read()
-                  except Exception as exc:
-                      data = str(exc).encode()
-                  pathlib.Path(f'test-results/{method}-{index}.json').write_bytes(data)
-          PY
-
-          sleep 5
-          echo "alive_five_seconds_later=$(kill -0 "$pid" 2>/dev/null && echo yes || echo no)" \
-            >> test-results/process-state.txt
           kill -TERM "$pid" 2>/dev/null || true
           sleep 2
           kill -KILL "$pid" 2>/dev/null || true
@@ -126,7 +98,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: fault-leak-${{ matrix.scenario }}
+          name: fault-leak-${{ matrix.scenario }}-no-observe
           path: test-results
           if-no-files-found: error
           retention-days: 7
