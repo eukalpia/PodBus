@@ -56,7 +56,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       max-parallel: 3
@@ -90,6 +90,7 @@ jobs:
           bash tool/ci/wait_for_toxiproxy.sh
       - name: Run isolated broker fault scenario
         run: >-
+          timeout --signal=TERM --kill-after=15s 10m
           dart run tool/fault_suite.dart
           --profile=${PROFILE}
           --scenario=${{ matrix.scenario }}
