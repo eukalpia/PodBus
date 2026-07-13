@@ -14,7 +14,9 @@ const _repository = 'https://github.com/eukalpia/PodBus';
 
 void main(List<String> arguments) {
   if (!arguments.contains('--check')) {
-    stderr.writeln('Usage: dart run tool/verify_release.dart --check');
+    stderr.writeln(
+      'Usage: dart run tool/verify_release.dart --check [--tag=vX.Y.Z]',
+    );
     exitCode = 64;
     return;
   }
@@ -55,14 +57,51 @@ void main(List<String> arguments) {
     failures.add('Package versions are inconsistent: $versions.');
   }
 
+  final version = versions.values.isEmpty ? null : versions.values.first;
+  if (version != null && !_semanticVersion.hasMatch(version)) {
+    failures.add('Package version is not valid semantic version syntax: $version.');
+  }
+
   for (final requiredPath in const [
     'README.md',
     'CHANGELOG.md',
     'SECURITY.md',
     'LICENSE',
+    'docs/beta-qualification.md',
+    'docs/production.md',
+    'website/lib/site.ts',
   ]) {
     if (!File(requiredPath).existsSync()) {
       failures.add('Missing required release file $requiredPath.');
+    }
+  }
+
+  if (version != null) {
+    _requireText(
+      failures,
+      path: 'README.md',
+      expected: version,
+      description: 'the package version',
+    );
+    _requireText(
+      failures,
+      path: 'CHANGELOG.md',
+      expected: '## $version',
+      description: 'a release heading for $version',
+    );
+    _requireText(
+      failures,
+      path: 'website/lib/site.ts',
+      expected: "version: '$version'",
+      description: 'the website version',
+    );
+
+    final tag = _requestedTag(arguments) ?? Platform.environment['GITHUB_REF_NAME'];
+    if (tag != null && tag.isNotEmpty && tag.startsWith('v')) {
+      final expectedTag = 'v$version';
+      if (tag != expectedTag) {
+        failures.add('Release tag $tag does not match package version $expectedTag.');
+      }
     }
   }
 
@@ -74,8 +113,37 @@ void main(List<String> arguments) {
     return;
   }
 
-  final version = versions.values.isEmpty ? 'unknown' : versions.values.first;
   stdout.writeln('Release metadata is consistent for $version.');
+}
+
+final _semanticVersion = RegExp(
+  r'^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)'
+  r'(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?'
+  r'(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$',
+);
+
+void _requireText(
+  List<String> failures, {
+  required String path,
+  required String expected,
+  required String description,
+}) {
+  final file = File(path);
+  if (!file.existsSync()) {
+    return;
+  }
+  if (!file.readAsStringSync().contains(expected)) {
+    failures.add('$path must contain $description (`$expected`).');
+  }
+}
+
+String? _requestedTag(List<String> arguments) {
+  for (final argument in arguments) {
+    if (argument.startsWith('--tag=')) {
+      return argument.substring('--tag='.length).trim();
+    }
+  }
+  return null;
 }
 
 Map<String, String> _topLevelFields(List<String> lines) {
