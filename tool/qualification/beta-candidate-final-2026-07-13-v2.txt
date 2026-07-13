@@ -1,0 +1,15 @@
+PodBus 0.1.0-beta.1 final qualification marker
+
+Runtime and documentation candidate includes:
+- RabbitMQ publisher-confirm lanes;
+- concurrent JetStream PubAck inbox routing;
+- isolate-based NATS and JetStream stress harnesses;
+- bounded recovery and broker fault diagnostics;
+- generation/delegate guards preventing late health probes from reconnecting after shutdown;
+- deterministic regressions for health probes completed after close.
+
+Mandatory evidence for this exact commit:
+- CI, compatibility, security, website, and plain Dart deployment;
+- 3.25 million mandatory NATS Core, JetStream, and RabbitMQ messages;
+- all twelve isolated broker fault scenarios exiting cleanly;
+- one uninterrupted one-hour resilience soak with zero missing acknowledged messages.
