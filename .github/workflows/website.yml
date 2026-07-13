@@ -64,6 +64,7 @@ jobs:
           test -s website/out/docs/introduction/index.html
           test -s website/out/docs/delivery-semantics/index.html
           test -s website/out/docs/rabbitmq/index.html
+          test -s website/out/docs/beta-qualification/index.html
           test -s website/out/docs/api-reference/index.html
 
       - name: Upload static export
