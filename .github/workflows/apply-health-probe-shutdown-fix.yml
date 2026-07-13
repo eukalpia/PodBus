@@ -1,0 +1,262 @@
+name: Apply health-probe shutdown fix
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/apply-health-probe-shutdown-fix.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-health-probe-shutdown-fix
+  cancel-in-progress: true
+
+jobs:
+  patch-validate-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: docs/beta-candidate-evidence
+          fetch-depth: 0
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260
+        with:
+          sdk: 3.12.0
+      - name: Guard late health probes after shutdown
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source_path = Path('packages/podbus_core/lib/src/resilience.dart')
+          source = source_path.read_text()
+
+          delegate_block = """    final delegate = _delegate;
+              if (delegate == null) {
+                return;
+              }
+              _probeActive = true;
+          """
+          guarded_delegate_block = """    final delegate = _delegate;
+              if (delegate == null) {
+                return;
+              }
+              final generation = _generation;
+              _probeActive = true;
+          """
+          if source.count(delegate_block) != 2:
+              raise SystemExit(f'expected 2 delegate blocks, got {source.count(delegate_block)}')
+          source = source.replace(delegate_block, guarded_delegate_block)
+
+          unhealthy = """      if (result.status == HealthStatus.unhealthy && !_closing) {
+          """
+          guarded_unhealthy = """      if (result.status == HealthStatus.unhealthy &&
+                  !_closing &&
+                  generation == _generation &&
+                  identical(delegate, _delegate)) {
+          """
+          if source.count(unhealthy) != 2:
+              raise SystemExit(f'expected 2 unhealthy conditions, got {source.count(unhealthy)}')
+          source = source.replace(unhealthy, guarded_unhealthy)
+
+          catch_block = """    } on Object catch (error) {
+              if (!_closing) {
+                try {
+                  await _recover(
+          """
+          guarded_catch_block = """    } on Object catch (error) {
+              if (!_closing &&
+                  generation == _generation &&
+                  identical(delegate, _delegate)) {
+                try {
+                  await _recover(
+          """
+          if source.count(catch_block) != 2:
+              raise SystemExit(f'expected 2 catch blocks, got {source.count(catch_block)}')
+          source = source.replace(catch_block, guarded_catch_block)
+          source_path.write_text(source)
+
+          test_path = Path('packages/podbus_core/test/resilience_test.dart')
+          tests = test_path.read_text()
+
+          replacements = [
+              (
+                  """  _FakeMessageBus({
+              this.connectGate,
+              this.closeGate,
+              this.connectError,
+              this.subscribeError,
+            });
+          """,
+                  """  _FakeMessageBus({
+              this.connectGate,
+              this.closeGate,
+              this.healthGate,
+              this.connectError,
+              this.subscribeError,
+            });
+          """,
+              ),
+              (
+                  """  final Future<void>? closeGate;
+            final Object? connectError;
+          """,
+                  """  final Future<void>? closeGate;
+            final Future<HealthCheckResult>? healthGate;
+            final Object? connectError;
+          """,
+              ),
+              (
+                  """  _FakeDurableQueue({this.connectGate, this.closeGate, this.connectError});
+          """,
+                  """  _FakeDurableQueue({
+              this.connectGate,
+              this.closeGate,
+              this.healthGate,
+              this.connectError,
+            });
+          """,
+              ),
+              (
+                  """  final Future<void>? closeGate;
+            final Object? connectError;
+            final List<_FakeWorker> workers = [];
+          """,
+                  """  final Future<void>? closeGate;
+            final Future<HealthCheckResult>? healthGate;
+            final Object? connectError;
+            final List<_FakeWorker> workers = [];
+          """,
+              ),
+          ]
+          for old, new in replacements:
+              if old not in tests:
+                  raise SystemExit(f'test marker not found: {old[:50]!r}')
+              tests = tests.replace(old, new, 1)
+
+          health_method = """  Future<HealthCheckResult> healthCheck() async {
+              return connected
+                  ? HealthCheckResult.healthy(message: 'connected')
+                  : HealthCheckResult.unhealthy(message: 'disconnected');
+            }
+          """
+          health_method_new = """  Future<HealthCheckResult> healthCheck() async {
+              healthChecks += 1;
+              final gate = healthGate;
+              if (gate != null) {
+                return gate;
+              }
+              return connected
+                  ? HealthCheckResult.healthy(message: 'connected')
+                  : HealthCheckResult.unhealthy(message: 'disconnected');
+            }
+          """
+          if tests.count(health_method) != 2:
+              raise SystemExit(f'expected 2 health methods, got {tests.count(health_method)}')
+          tests = tests.replace(health_method, health_method_new)
+
+          tests = tests.replace('  int closedSubscriptions = 0;\n', '  int closedSubscriptions = 0;\n  int healthChecks = 0;\n', 1)
+          tests = tests.replace('  int closedWorkers = 0;\n', '  int closedWorkers = 0;\n  int healthChecks = 0;\n', 1)
+
+          bus_test = """
+              test('does not reconnect from a health probe completed after close', () async {
+                final probe = Completer<HealthCheckResult>();
+                final delegates = <_FakeMessageBus>[];
+                final bus = ResilientMessageBus(
+                  factory: () {
+                    final delegate = _FakeMessageBus(
+                      healthGate: delegates.isEmpty ? probe.future : null,
+                    );
+                    delegates.add(delegate);
+                    return delegate;
+                  },
+                  policy: const ReconnectPolicy(
+                    initialDelay: Duration.zero,
+                    maxDelay: Duration.zero,
+                    jitter: 0,
+                    healthCheckInterval: Duration(milliseconds: 1),
+                    healthCheckTimeout: Duration(seconds: 1),
+                  ),
+                );
+
+                await bus.connect();
+                await _waitUntil(() => delegates.first.healthChecks > 0);
+                await bus.close(timeout: const Duration(milliseconds: 100));
+                probe.complete(HealthCheckResult.unhealthy(message: 'late result'));
+                await Future<void>.delayed(const Duration(milliseconds: 30));
+
+                expect(delegates, hasLength(1));
+                await bus.close();
+              });
+
+          """
+          bus_group_end = """  });
+
+            group('ResilientDurableJobQueue', () {
+          """
+          if bus_group_end not in tests:
+              raise SystemExit('message bus group marker not found')
+          tests = tests.replace(bus_group_end, bus_test + bus_group_end, 1)
+
+          queue_test = """
+              test('does not reconnect from a job probe completed after close', () async {
+                final probe = Completer<HealthCheckResult>();
+                final delegates = <_FakeDurableQueue>[];
+                final queue = ResilientDurableJobQueue(
+                  factory: () {
+                    final delegate = _FakeDurableQueue(
+                      healthGate: delegates.isEmpty ? probe.future : null,
+                    );
+                    delegates.add(delegate);
+                    return delegate;
+                  },
+                  policy: const ReconnectPolicy(
+                    initialDelay: Duration.zero,
+                    maxDelay: Duration.zero,
+                    jitter: 0,
+                    healthCheckInterval: Duration(milliseconds: 1),
+                    healthCheckTimeout: Duration(seconds: 1),
+                  ),
+                );
+
+                await queue.connect();
+                await _waitUntil(() => delegates.first.healthChecks > 0);
+                await queue.close(timeout: const Duration(milliseconds: 100));
+                probe.complete(HealthCheckResult.unhealthy(message: 'late result'));
+                await Future<void>.delayed(const Duration(milliseconds: 30));
+
+                expect(delegates, hasLength(1));
+                await queue.close();
+              });
+
+          """
+          queue_group_start = """  group('ResilientDurableJobQueue', () {
+          """
+          if queue_group_start not in tests:
+              raise SystemExit('durable queue group marker not found')
+          tests = tests.replace(queue_group_start, queue_group_start + queue_test, 1)
+          test_path.write_text(tests)
+          PY
+      - name: Resolve dependencies
+        run: dart pub get
+      - name: Format, analyze, and test regression
+        run: |
+          dart format packages/podbus_core/lib/src/resilience.dart packages/podbus_core/test/resilience_test.dart
+          dart analyze packages/podbus_core
+          dart test packages/podbus_core/test/resilience_test.dart --reporter=expanded
+      - name: Commit validated fix to automation branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add packages/podbus_core/lib/src/resilience.dart packages/podbus_core/test/resilience_test.dart
+          git commit -m "Prevent late health probes from reconnecting after shutdown"
+          git fetch origin automation/health-probe-shutdown-fix
+          git rebase origin/automation/health-probe-shutdown-fix
+          git push origin HEAD:automation/health-probe-shutdown-fix
