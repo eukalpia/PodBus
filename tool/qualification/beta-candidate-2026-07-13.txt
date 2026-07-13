@@ -1,17 +1,20 @@
-PodBus beta-candidate qualification
+PodBus 0.1.0-beta.1 final qualification
 
 Requested: 2026-07-13 Asia/Tashkent
-Branch: beta-resilience-production-suite
-Baseline before marker: 35f7a4fb2adc43a3f542e36e8868dd73cac8707d
+Branch: docs/beta-candidate-evidence
+Qualified runtime baseline: 784b3d533f4ea962324394c31ea4712c1a5e8c47
+Release-candidate parent before marker: 977352583b59b640f2b379e433a84e9c4fd7f13a
 
-Mandatory evidence for this commit:
-- complete format, analyzer, unit, coverage, compatibility, and security gates;
-- NATS, RabbitMQ, Kafka, and PostgreSQL integration suites;
+Mandatory evidence for the marker commit:
+- complete format, analyzer, unit, coverage, package metadata, compatibility, and security gates;
+- NATS, RabbitMQ, Kafka, and PostgreSQL Docker-backed integration suites;
 - plain Dart process deployment and graceful shutdown;
-- twelve isolated NATS and RabbitMQ broker fault scenarios;
-- 3,250,000 required NATS, JetStream, and RabbitMQ stress messages;
-- Kafka stress reported separately as experimental evidence;
+- static documentation type-check, export, and route validation;
+- twelve isolated NATS and RabbitMQ broker fault scenarios with bounded process shutdown;
+- 3,250,000 required NATS Core, JetStream, and RabbitMQ stress messages;
+- Kafka stress reported separately as experimental and non-gating;
 - one-hour resilience soak with zero missing acknowledged messages;
-- retained machine-readable reports and broker diagnostics.
+- retained machine-readable reports, machine metadata, broker logs, and resource diagnostics;
+- package, website, README, changelog, and release-tag version agreement on 0.1.0-beta.1.
 
-Do not describe this revision as beta-ready unless the mandatory evidence above passes for this exact commit.
+Do not tag or describe this revision as qualified unless every mandatory gate above passes for the marker commit itself.
