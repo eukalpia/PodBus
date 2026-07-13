@@ -22,13 +22,18 @@ jobs:
       - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260
         with:
           sdk: 3.12.0
-      - name: Resolve dependencies
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - name: Resolve Dart dependencies
         run: dart pub get
-      - name: Verify source
+      - name: Verify Dart source and release metadata
         run: |
           dart format --output=none --set-exit-if-changed .
           dart analyze .
-          dart run tool/verify_release.dart --check
+          dart run tool/verify_release.dart --check --tag="$GITHUB_REF_NAME"
           dart test \
             packages/podbus_core/test \
             packages/podbus_nats/test \
@@ -38,12 +43,23 @@ jobs:
             packages/podbus_observability/test \
             packages/podbus_serverpod/test \
             --exclude-tags=integration
+      - name: Build release documentation
+        shell: bash
+        run: |
+          mkdir -p website/public
+          cp assets/podbus.png website/public/podbus.png
+          cd website
+          npm ci --no-audit --no-fund
+          npm run typecheck
+          GITHUB_ACTIONS=true npm run build
+          test -s out/index.html
+          test -s out/docs/beta-qualification/index.html
 
   fault-gate:
     name: release fault / ${{ matrix.scenario }}
     needs: source-gate
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       max-parallel: 3
@@ -77,6 +93,7 @@ jobs:
           bash tool/ci/wait_for_toxiproxy.sh
       - name: Run isolated full fault scenario
         run: >-
+          timeout --signal=TERM --kill-after=15s 10m
           dart run tool/fault_suite.dart
           --profile=full
           --scenario=${{ matrix.scenario }}
@@ -119,16 +136,8 @@ jobs:
           sdk: 3.12.0
       - name: Resolve dependencies
         run: dart pub get
-      - name: Verify tag matches package version
-        shell: bash
-        run: |
-          set -euo pipefail
-          version=$(awk '/^version:/{print $2; exit}' packages/podbus_core/pubspec.yaml)
-          expected="v${version}"
-          if [[ "$GITHUB_REF_NAME" != "$expected" ]]; then
-            echo "Tag $GITHUB_REF_NAME does not match package version $expected." >&2
-            exit 1
-          fi
+      - name: Verify release metadata again
+        run: dart run tool/verify_release.dart --check --tag="$GITHUB_REF_NAME"
       - name: Build source archives
         shell: bash
         run: |
