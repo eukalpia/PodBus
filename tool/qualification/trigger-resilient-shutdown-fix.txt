@@ -1,0 +1,1 @@
+Validate and publish the source-only fix that closes resilient proxy registrations and their owning transport concurrently.
