@@ -1,0 +1,135 @@
+name: Generate resilient shutdown fix
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    paths:
+      - "packages/podbus_core/test/_generate_resilient_shutdown_fix_test.dart"
+      - ".github/workflows/generate-resilient-shutdown-fix.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    if: github.head_ref == 'docs/beta-candidate-evidence' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260
+        with:
+          sdk: 3.12.0
+      - name: Resolve dependencies
+        run: dart pub get
+      - name: Generate and format candidate files
+        run: dart test packages/podbus_core/test/_generate_resilient_shutdown_fix_test.dart
+      - name: Create detached Git commit object
+        id: commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="repos/${GITHUB_REPOSITORY}"
+
+          create_blob() {
+            local path="$1"
+            local encoded
+            encoded="$(base64 -w0 "$path")"
+            gh api --method POST "${repo}/git/blobs" \
+              -f content="$encoded" \
+              -f encoding=base64 \
+              --jq .sha
+          }
+
+          source_blob="$(create_blob coverage/generated/resilience.dart)"
+          test_blob="$(create_blob coverage/generated/resilient_shutdown_test.dart)"
+
+          marker="$(mktemp)"
+          cat > "$marker" <<EOF
+          PodBus 0.1.0-beta.1 final qualification
+
+          Requested: 2026-07-13 Asia/Tashkent
+          Branch: docs/beta-candidate-evidence
+          Qualified runtime baseline: 784b3d533f4ea962324394c31ea4712c1a5e8c47
+          Release-candidate parent before marker: ${HEAD_SHA}
+
+          Mandatory evidence for the generated commit:
+          - complete format, analyzer, unit, coverage, package metadata, compatibility, and security gates;
+          - NATS, RabbitMQ, Kafka, and PostgreSQL Docker-backed integration suites;
+          - plain Dart process deployment and graceful shutdown;
+          - static documentation type-check, export, and route validation;
+          - twelve isolated NATS and RabbitMQ broker fault scenarios with bounded process shutdown;
+          - 3,250,000 required NATS Core, JetStream, and RabbitMQ stress messages;
+          - Kafka stress reported separately as experimental and non-gating;
+          - one-hour resilience soak with zero missing acknowledged messages;
+          - retained machine-readable reports, machine metadata, broker logs, and resource diagnostics;
+          - package, website, README, changelog, and release-tag version agreement on 0.1.0-beta.1.
+
+          Do not tag or describe this revision as qualified unless every mandatory gate above passes for the generated commit itself.
+          EOF
+          sed -i 's/^          //' "$marker"
+          marker_blob="$(create_blob "$marker")"
+
+          base_tree="$(gh api "${repo}/git/commits/${HEAD_SHA}" --jq .tree.sha)"
+          tree_payload="$(mktemp)"
+          jq -n \
+            --arg base_tree "$base_tree" \
+            --arg source_blob "$source_blob" \
+            --arg test_blob "$test_blob" \
+            --arg marker_blob "$marker_blob" \
+            '{
+              base_tree: $base_tree,
+              tree: [
+                {
+                  path: "packages/podbus_core/lib/src/resilience.dart",
+                  mode: "100644",
+                  type: "blob",
+                  sha: $source_blob
+                },
+                {
+                  path: "packages/podbus_core/test/resilient_shutdown_test.dart",
+                  mode: "100644",
+                  type: "blob",
+                  sha: $test_blob
+                },
+                {
+                  path: "packages/podbus_core/test/_generate_resilient_shutdown_fix_test.dart",
+                  mode: "100644",
+                  type: "blob",
+                  sha: null
+                },
+                {
+                  path: "tool/qualification/beta-candidate-2026-07-13.txt",
+                  mode: "100644",
+                  type: "blob",
+                  sha: $marker_blob
+                }
+              ]
+            }' > "$tree_payload"
+          tree_sha="$(gh api --method POST "${repo}/git/trees" --input "$tree_payload" --jq .sha)"
+
+          commit_payload="$(mktemp)"
+          jq -n \
+            --arg message "Fix resilient shutdown cleanup and add regression coverage" \
+            --arg tree "$tree_sha" \
+            --arg parent "$HEAD_SHA" \
+            '{message: $message, tree: $tree, parents: [$parent]}' \
+            > "$commit_payload"
+          commit_sha="$(gh api --method POST "${repo}/git/commits" --input "$commit_payload" --jq .sha)"
+
+          mkdir -p generated-commit
+          printf '%s\n' "$commit_sha" | tee generated-commit/commit-sha.txt
+          echo "commit_sha=$commit_sha" >> "$GITHUB_OUTPUT"
+      - name: Upload detached commit reference
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: resilient-shutdown-fix-commit
+          path: generated-commit/commit-sha.txt
+          if-no-files-found: error
+          retention-days: 1
