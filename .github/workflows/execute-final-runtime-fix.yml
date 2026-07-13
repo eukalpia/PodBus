@@ -30,15 +30,21 @@ jobs:
           git fetch origin main
           git show origin/main:tool/ci/apply_final_runtime_fix.py > /tmp/apply_final_runtime_fix.py
           python3 /tmp/apply_final_runtime_fix.py
-      - name: Validate source and unit regressions
+      - name: Resolve and format
         run: |
-          dart pub get
+          mkdir -p test-results
+          dart pub get > test-results/pub-get.log 2>&1
           dart format packages/podbus_core/lib/src/resilience.dart \
-            packages/podbus_nats/lib/src/nats_jetstream_adapter.dart
-          dart analyze packages/podbus_core
-          dart analyze packages/podbus_nats
-          dart test packages/podbus_core/test/resilience_test.dart --reporter=expanded
-          dart test packages/podbus_nats/test --exclude-tags=integration --reporter=expanded
+            packages/podbus_nats/lib/src/nats_jetstream_adapter.dart \
+            > test-results/format.log 2>&1
+      - name: Analyze podbus_core
+        run: dart analyze packages/podbus_core 2>&1 | tee test-results/analyze-core.log
+      - name: Analyze podbus_nats
+        run: dart analyze packages/podbus_nats 2>&1 | tee test-results/analyze-nats.log
+      - name: Test resilience core
+        run: dart test packages/podbus_core/test/resilience_test.dart --reporter=expanded 2>&1 | tee test-results/test-core.log
+      - name: Test NATS unit suite
+        run: dart test packages/podbus_nats/test --exclude-tags=integration --reporter=expanded 2>&1 | tee test-results/test-nats.log
       - name: Start clean brokers and Toxiproxy
         run: bash tool/ci/start_integration_services.sh nats rabbitmq toxiproxy
       - name: Wait for services
@@ -52,7 +58,8 @@ jobs:
             dart run tool/fault_suite.dart \
               --profile=smoke \
               --scenario=nats-tcp-partition,rabbitmq-tcp-partition,rabbitmq-channel-failures \
-              --report=test-results/final-runtime-fault-smoke.json
+              --report=test-results/final-runtime-fault-smoke.json \
+            2>&1 | tee test-results/fault-smoke.log
       - name: Verify reconnectable NATS errors during short soak
         run: |
           timeout --signal=TERM --kill-after=15s 8m \
@@ -63,7 +70,16 @@ jobs:
               --outage=2s \
               --publish-interval=25ms \
               --max-operation-errors=0 \
-              --report=test-results/final-runtime-soak.json
+              --report=test-results/final-runtime-soak.json \
+            2>&1 | tee test-results/soak-smoke.log
+      - name: Upload validation diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: final-runtime-fix-validation
+          path: test-results
+          if-no-files-found: warn
+          retention-days: 7
       - name: Stop services
         if: always()
         run: docker compose -f docker-compose.integration.yaml down -v --remove-orphans
