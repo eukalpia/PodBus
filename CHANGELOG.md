@@ -4,6 +4,8 @@ All notable changes to PodBus are documented here. The project follows Semantic 
 
 ## Unreleased
 
+## 0.1.0-beta.1 - 2026-07-13
+
 ### Added
 
 - Cross-transport capability discovery.
