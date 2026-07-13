@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dart_nats/dart_nats.dart' as nats;
+import 'package:podbus_core/podbus_core.dart';
 import 'package:podbus_nats/src/config.dart';
 import 'package:podbus_nats/src/nats_jetstream_adapter.dart';
 import 'package:test/test.dart';
@@ -107,7 +108,13 @@ void main() {
       ], timeout: const Duration(milliseconds: 25));
       final publishExpectation = expectLater(
         pending,
-        throwsA(isA<TimeoutException>()),
+        throwsA(
+          isA<MessagingTimeoutException>().having(
+            (error) => error.timeout,
+            'timeout',
+            const Duration(milliseconds: 25),
+          ),
+        ),
       );
       await Future<void>.delayed(Duration.zero);
 
