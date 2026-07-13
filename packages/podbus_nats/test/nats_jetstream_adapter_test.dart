@@ -70,6 +70,29 @@ void main() {
       await adapter.close();
       await expectation;
     });
+
+    test('drain is bounded by the outstanding publish deadline', () async {
+      final client = _FakeNatsClient()..autoReply = false;
+      final adapter = DartNatsJetStreamAdapter(client: client);
+      await adapter.connect(_config());
+
+      final pending = adapter.publish('podbus.test.drain-timeout', const [
+        4,
+      ], timeout: const Duration(milliseconds: 25));
+      final publishExpectation = expectLater(
+        pending,
+        throwsA(isA<TimeoutException>()),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      await expectLater(
+        adapter.drain().timeout(const Duration(seconds: 1)),
+        throwsA(isA<TimeoutException>()),
+      );
+      await publishExpectation;
+      expect(client.closeCalled, isTrue);
+      expect(adapter.isConnected, isFalse);
+    });
   });
 }
 
@@ -90,6 +113,7 @@ final class _FakeNatsClient extends nats.Client {
 
   bool autoReply = true;
   bool failNext = false;
+  bool closeCalled = false;
   int maximumInFlight = 0;
   final Set<String> messageIds = {};
 
@@ -192,6 +216,7 @@ final class _FakeNatsClient extends nats.Client {
 
   @override
   Future<void> close() async {
+    closeCalled = true;
     _connected = false;
   }
 }
