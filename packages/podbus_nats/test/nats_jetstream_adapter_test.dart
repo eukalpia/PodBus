@@ -70,10 +70,10 @@ void main() {
         const [3],
         timeout: const Duration(minutes: 1),
       );
+      final expectation = expectLater(pending, throwsA(isA<StateError>()));
       await Future<void>.delayed(Duration.zero);
       await adapter.close();
-
-      await expectLater(pending, throwsA(isA<StateError>()));
+      await expectation;
     });
   });
 }
@@ -91,7 +91,7 @@ final class _FakeNatsClient extends nats.Client {
   int _sid = 0;
   int _sequence = 0;
   int _inFlight = 0;
-  nats.Subscription<dynamic>? _replySubscription;
+  void Function(nats.Message<dynamic>)? _deliverReply;
 
   bool autoReply = true;
   bool failNext = false;
@@ -128,7 +128,7 @@ final class _FakeNatsClient extends nats.Client {
       queueGroup: queueGroup,
       jsonDecoder: jsonDecoder,
     );
-    _replySubscription = subscription as nats.Subscription<dynamic>;
+    _deliverReply = subscription.add;
     return subscription;
   }
 
@@ -158,23 +158,25 @@ final class _FakeNatsClient extends nats.Client {
     final delay = Duration(milliseconds: sequence.isEven ? 1 : 4);
     unawaited(
       Future<void>.delayed(delay, () {
-        final subscription = _replySubscription;
-        if (subscription == null) {
+        final deliverReply = _deliverReply;
+        if (deliverReply == null) {
           return;
         }
         final payload = shouldFail
-            ? {
-                'error': {'description': 'simulated publish failure'},
+            ? <String, Object?>{
+                'error': <String, Object?>{
+                  'description': 'simulated publish failure',
+                },
               }
-            : {
+            : <String, Object?>{
                 'stream': 'PODBUS_TEST',
                 'seq': sequence,
                 'duplicate': false,
               };
-        subscription.add(
+        deliverReply(
           nats.Message<dynamic>(
             replyTo,
-            subscription.sid,
+            _sid,
             Uint8List.fromList(utf8.encode(jsonEncode(payload))),
             this,
           ),
