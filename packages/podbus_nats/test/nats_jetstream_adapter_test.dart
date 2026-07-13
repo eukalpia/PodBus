@@ -9,6 +9,32 @@ import 'package:test/test.dart';
 
 void main() {
   group('DartNatsJetStreamAdapter publish acknowledgements', () {
+    test('uses independent cryptographically random reply inboxes', () async {
+      final firstClient = _FakeNatsClient();
+      final secondClient = _FakeNatsClient();
+      final first = DartNatsJetStreamAdapter(client: firstClient);
+      final second = DartNatsJetStreamAdapter(client: secondClient);
+
+      await first.connect(_config());
+      await second.connect(_config());
+      addTearDown(first.close);
+      addTearDown(second.close);
+
+      final firstSubject = firstClient.subscriptionSubject;
+      final secondSubject = secondClient.subscriptionSubject;
+      expect(firstSubject, isNotNull);
+      expect(secondSubject, isNotNull);
+      expect(firstSubject, startsWith('_INBOX.PODBUS.JS.'));
+      expect(secondSubject, startsWith('_INBOX.PODBUS.JS.'));
+      expect(firstSubject, endsWith('.>'));
+      expect(secondSubject, endsWith('.>'));
+      expect(firstSubject, isNot(secondSubject));
+      expect(
+        firstSubject,
+        matches(RegExp(r'^_INBOX\.PODBUS\.JS\.[0-9A-Za-z]{22}\.>$')),
+      );
+    });
+
     test('routes concurrent out-of-order acknowledgements', () async {
       final client = _FakeNatsClient();
       final adapter = DartNatsJetStreamAdapter(client: client);
@@ -115,6 +141,7 @@ final class _FakeNatsClient extends nats.Client {
   bool failNext = false;
   bool closeCalled = false;
   int maximumInFlight = 0;
+  String? subscriptionSubject;
   final Set<String> messageIds = {};
 
   @override
@@ -140,6 +167,7 @@ final class _FakeNatsClient extends nats.Client {
     String? queueGroup,
     T Function(String)? jsonDecoder,
   }) {
+    subscriptionSubject = subject;
     final subscription = nats.Subscription<T>(
       ++_sid,
       subject,
