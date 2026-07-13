@@ -42,11 +42,9 @@ void main() {
       addTearDown(adapter.close);
 
       await expectLater(
-        adapter.publish(
-          'podbus.test.failure',
-          const [1],
-          timeout: const Duration(seconds: 1),
-        ),
+        adapter.publish('podbus.test.failure', const [
+          1,
+        ], timeout: const Duration(seconds: 1)),
         throwsA(isA<StateError>()),
       );
 
@@ -64,11 +62,9 @@ void main() {
       final adapter = DartNatsJetStreamAdapter(client: client);
       await adapter.connect(_config());
 
-      final pending = adapter.publish(
-        'podbus.test.pending',
-        const [3],
-        timeout: const Duration(minutes: 1),
-      );
+      final pending = adapter.publish('podbus.test.pending', const [
+        3,
+      ], timeout: const Duration(minutes: 1));
       final expectation = expectLater(pending, throwsA(isA<StateError>()));
       await Future<void>.delayed(Duration.zero);
       await adapter.close();
