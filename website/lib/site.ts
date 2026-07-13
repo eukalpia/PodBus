@@ -1,6 +1,6 @@
 export const siteConfig = {
   name: 'PodBus',
-  version: '0.1.0-alpha.1',
+  version: '0.1.0-beta.1',
   description:
     'Transport-aware messaging and durable jobs for Dart and Serverpod.',
   repository: 'https://github.com/eukalpia/PodBus',
