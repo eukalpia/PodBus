@@ -12,7 +12,7 @@
   <a href="https://github.com/eukalpia/PodBus/actions/workflows/security.yml"><img alt="Security" src="https://github.com/eukalpia/PodBus/actions/workflows/security.yml/badge.svg" /></a>
   <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" /></a>
   <img alt="Dart SDK" src="https://img.shields.io/badge/Dart-%5E3.12.0-0175C2?logo=dart" />
-  <img alt="Status" src="https://img.shields.io/badge/status-alpha-orange" />
+  <img alt="Status" src="https://img.shields.io/badge/status-beta%20candidate-blueviolet" />
 </p>
 
 PodBus is a Dart toolkit for message-driven services. It provides a common API for publish/subscribe, request/reply, durable workers, retries, dead letters, typed payloads, health checks, and Serverpod integration.
@@ -22,13 +22,30 @@ The abstraction stops where broker semantics diverge. Applications can inspect t
 PodBus is not a broker. It runs on top of NATS, RabbitMQ, Kafka, and PostgreSQL-backed reliability primitives.
 
 > [!IMPORTANT]
-> PodBus is currently `0.1.0-alpha.1`. NATS Core and JetStream are the reference transports. RabbitMQ is suitable for controlled production evaluation. Kafka is experimental. Public APIs may still change before the first stable release.
+> PodBus packages remain `0.1.0-alpha.1`, but the NATS Core, JetStream, and RabbitMQ paths are now an evidence-backed **beta candidate**. Public APIs may still change before the first stable release. Kafka integration is covered by CI, while Kafka large-stress and rebalance behavior remain experimental.
+
+## Qualification snapshot
+
+The beta-candidate gate is pinned to commit `784b3d533f4ea962324394c31ea4712c1a5e8c47` and includes CI, security, plain-Dart deployment, Dart 3.12 plus current-stable compatibility, 3.25 million mandatory transport messages, twelve broker fault scenarios, and a real one-hour resilience soak.
+
+All stress payloads were 256 bytes on GitHub-hosted Ubuntu runners with four logical CPUs. These values are regression evidence for that environment—not universal performance promises.
+
+| Transport | Mode | Messages | Result | Throughput |
+| --- | --- | ---: | ---: | ---: |
+| NATS Core | queue group, isolated publisher and consumers | 1,000,000 | 1,000,000 unique, 0 duplicates | 42,501.6 msg/s |
+| JetStream | durable, memory storage, PubAck and manual ack | 250,000 | 250,000 unique, 0 duplicates | 2,928.9 msg/s |
+| JetStream | worker, file storage, PubAck and manual ack | 250,000 | 250,000 unique, 0 duplicates | 2,371.2 msg/s |
+| RabbitMQ | non-persistent, publisher confirms | 1,000,000 | 1,000,000 received | 5,040.8 msg/s |
+| RabbitMQ | persistent queue and messages, confirms | 500,000 | 500,000 received | 1,705.5 msg/s |
+| RabbitMQ | durable workers, confirms and manual ack | 250,000 | 250,000 received | 1,404.6 msg/s |
+
+Do not rank these rows as one synthetic race. NATS Core, persistent RabbitMQ, and JetStream provide different persistence and acknowledgement contracts. Read [Beta candidate qualification](docs/beta-qualification.md) for methodology, failure evidence, operational defaults, and known limits.
 
 ## What is included
 
 - NATS Core publish/subscribe and request/reply
-- NATS JetStream durable workers
-- RabbitMQ publisher confirms, mandatory routing, retries, and dead-letter queues
+- NATS JetStream durable workers and concurrent PubAck routing
+- RabbitMQ publisher-confirm lanes, mandatory routing, retries, and dead-letter queues
 - Experimental Kafka producers and consumer groups through native `librdkafka` bindings
 - Typed JSON codecs with explicit message types and schema versions
 - PostgreSQL transactional outbox, inbox leases, and persistent idempotency
@@ -158,7 +175,7 @@ Retries and dead-letter publication complete before the source message is acknow
 | Dead-letter handling | ✓ | — | ✓ | ✓ | ✓ |
 | Manual acknowledgement or commit | — | — | ✓ | ✓ | ✓ |
 | Typed codec registry | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Maturity | development | reference | reference | beta | experimental |
+| Maturity | development | reference | reference | beta candidate | experimental |
 
 Use `capabilities` as the runtime source of truth:
 
@@ -300,6 +317,7 @@ await messaging.start();
 
 The repository includes operational material alongside the library:
 
+- [Beta candidate qualification](docs/beta-qualification.md)
 - [Production deployment](docs/production.md)
 - [Incident runbook](docs/runbook.md)
 - [Disaster recovery](docs/disaster-recovery.md)
@@ -345,11 +363,11 @@ Benchmarks in distributed systems are configuration-dependent. The stress tools 
 
 Before the first stable release, the work is focused on:
 
-- long-running fault and soak tests across supported broker versions
-- stable Kafka rebalance and delivery-report behavior
+- independent production evaluations and feedback from real workloads
+- stable Kafka rebalance, batching, and delivery-report behavior
 - compatibility fixtures for wire-schema evolution
-- independent production evaluations
-- package publication after the API surface settles
+- repeatable package publication after the API surface settles
+- broker-cluster and multi-region failure qualification in representative environments
 
 A `1.0.0` release will mean a documented compatibility policy and a stable public API. It will not mean exactly-once delivery across arbitrary external side effects.
 
