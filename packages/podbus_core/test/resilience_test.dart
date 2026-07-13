@@ -352,6 +352,46 @@ void main() {
       expect(delegates, hasLength(1));
       await bus.close();
     });
+
+    test(
+      'closes the transport while a subscription proxy is stalled',
+      () async {
+        final gate = Completer<void>();
+        final delegate = _FakeMessageBus(subscriptionCloseGate: gate.future);
+        final bus = ResilientMessageBus(
+          factory: () => delegate,
+          policy: const ReconnectPolicy(healthCheckInterval: null),
+        );
+        await bus.connect();
+        await bus.subscribe<int>('events.stalled', handler: (_, _) async {});
+
+        await expectLater(
+          bus.close(timeout: const Duration(milliseconds: 20)),
+          throwsA(isA<MessagingTimeoutException>()),
+        );
+
+        expect(delegate.closed, isTrue);
+        gate.complete();
+        await Future<void>.delayed(Duration.zero);
+        await bus.close();
+      },
+    );
+
+    test('coalesces concurrent close calls', () async {
+      final gate = Completer<void>();
+      final delegate = _FakeMessageBus(closeGate: gate.future);
+      final bus = ResilientMessageBus(
+        factory: () => delegate,
+        policy: const ReconnectPolicy(healthCheckInterval: null),
+      );
+      await bus.connect();
+
+      final first = bus.close(timeout: const Duration(seconds: 1));
+      final second = bus.close(timeout: const Duration(seconds: 1));
+      expect(identical(first, second), isTrue);
+      gate.complete();
+      await Future.wait([first, second]);
+    });
   });
 
   group('ResilientDurableJobQueue', () {
@@ -559,6 +599,27 @@ void main() {
       await queue.close();
     });
 
+    test('closes the transport while a worker proxy is stalled', () async {
+      final gate = Completer<void>();
+      final delegate = _FakeDurableQueue(workerCloseGate: gate.future);
+      final queue = ResilientDurableJobQueue(
+        factory: () => delegate,
+        policy: const ReconnectPolicy(healthCheckInterval: null),
+      );
+      await queue.connect();
+      await queue.worker<int>('jobs.stalled', handler: (_, _) async {});
+
+      await expectLater(
+        queue.close(timeout: const Duration(milliseconds: 20)),
+        throwsA(isA<MessagingTimeoutException>()),
+      );
+
+      expect(delegate.closed, isTrue);
+      gate.complete();
+      await Future<void>.delayed(Duration.zero);
+      await queue.close();
+    });
+
     test('close drains active proxy registrations and delegate', () async {
       final delegate = _FakeDurableQueue();
       final queue = ResilientDurableJobQueue(factory: () => delegate);
@@ -590,6 +651,7 @@ final class _FakeMessageBus implements MessageBus {
     this.connectGate,
     this.closeGate,
     this.healthGate,
+    this.subscriptionCloseGate,
     this.connectError,
     this.subscribeError,
   });
@@ -597,6 +659,7 @@ final class _FakeMessageBus implements MessageBus {
   final Future<void>? connectGate;
   final Future<void>? closeGate;
   final Future<HealthCheckResult>? healthGate;
+  final Future<void>? subscriptionCloseGate;
   final Object? connectError;
   final Object? subscribeError;
   final List<String> publishedSubjects = [];
@@ -674,6 +737,7 @@ final class _FakeMessageBus implements MessageBus {
       onClose: () => closedSubscriptions += 1,
       subject: subject,
       deliver: (payload) => handler(_FakeMessageContext(subject), payload as T),
+      closeGate: subscriptionCloseGate,
     );
     subscriptions.add(subscription);
     return subscription;
@@ -705,17 +769,20 @@ final class _FakeSubscription implements Subscription {
     required this.onClose,
     required this.subject,
     required this.deliver,
+    this.closeGate,
   });
 
   final void Function() onClose;
   final String subject;
   final Future<void> Function(Object? payload) deliver;
+  final Future<void>? closeGate;
   bool closed = false;
 
   @override
   Future<void> close() async {
     if (closed) return;
     closed = true;
+    await closeGate;
     onClose();
   }
 }
@@ -725,12 +792,14 @@ final class _FakeDurableQueue implements DurableJobQueue {
     this.connectGate,
     this.closeGate,
     this.healthGate,
+    this.workerCloseGate,
     this.connectError,
   });
 
   final Future<void>? connectGate;
   final Future<void>? closeGate;
   final Future<HealthCheckResult>? healthGate;
+  final Future<void>? workerCloseGate;
   final Object? connectError;
   final List<_FakeWorker> workers = [];
   bool connected = false;
@@ -795,6 +864,7 @@ final class _FakeDurableQueue implements DurableJobQueue {
       topic: topic,
       deliver: (payload) => handler(_FakeJobContext(topic), payload as T),
       onClose: () => closedWorkers += 1,
+      closeGate: workerCloseGate,
     );
     workers.add(worker);
     return worker;
@@ -826,17 +896,20 @@ final class _FakeWorker implements Worker {
     required this.topic,
     required this.deliver,
     required this.onClose,
+    this.closeGate,
   });
 
   final String topic;
   final Future<void> Function(Object? payload) deliver;
   final void Function() onClose;
+  final Future<void>? closeGate;
   bool closed = false;
 
   @override
   Future<void> close() async {
     if (closed) return;
     closed = true;
+    await closeGate;
     onClose();
   }
 }

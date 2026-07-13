@@ -146,6 +146,7 @@ final class ResilientMessageBus implements MessageBus {
   MessageBus? _delegate;
   Future<void>? _connecting;
   Future<void>? _recovery;
+  Future<void>? _closeFuture;
   Timer? _healthTimer;
   var _probeActive = false;
   var _closing = false;
@@ -193,53 +194,71 @@ final class ResilientMessageBus implements MessageBus {
   }
 
   @override
-  Future<void> close({Duration? timeout}) async {
-    if (_closing) {
-      return;
+  Future<void> close({Duration? timeout}) {
+    final existing = _closeFuture;
+    if (existing != null) {
+      return existing;
     }
+    final effectiveTimeout = timeout ?? policy.recoveryTimeout;
+    late final Future<void> closing;
+    closing = _closeResources(effectiveTimeout).whenComplete(() {
+      if (identical(_closeFuture, closing)) {
+        _closeFuture = null;
+      }
+    });
+    _closeFuture = closing;
+    return closing;
+  }
+
+  Future<void> _closeResources(Duration effectiveTimeout) async {
     _closing = true;
     _generation += 1;
     _stopHealthMonitor();
-    final effectiveTimeout = timeout ?? policy.recoveryTimeout;
+
+    final registrations = _registrations.toList();
+    _registrations.clear();
+    final delegate = _delegate;
+    _delegate = null;
     Object? failure;
     StackTrace? failureStackTrace;
+
+    Future<void> guard(String component, Future<void> Function() action) async {
+      try {
+        await action().timeout(
+          effectiveTimeout,
+          onTimeout: () {
+            throw MessagingTimeoutException(
+              'Message bus $component shutdown exceeded $effectiveTimeout.',
+              timeout: effectiveTimeout,
+            );
+          },
+        );
+      } on Object catch (error, stackTrace) {
+        failure ??= error;
+        failureStackTrace ??= stackTrace;
+      }
+    }
+
     try {
-      final connecting = _connecting;
-      if (connecting != null) {
-        try {
-          await connecting.timeout(effectiveTimeout);
-        } on Object {
-          // A concurrent connect is cancelled or failed; cleanup continues.
-        }
-      }
-      final recovery = _recovery;
-      if (recovery != null) {
-        try {
-          await recovery.timeout(effectiveTimeout);
-        } on Object {
-          // Shutdown cancels recovery; cleanup continues with the delegate.
-        }
-      }
+      // Registration shutdown and transport shutdown intentionally run together.
+      // A worker can be blocked in a broker fetch while the transport close is
+      // the operation that releases that fetch. Serial shutdown deadlocks that
+      // dependency and can skip adapter cleanup after a timeout.
       await Future.wait([
-        for (final registration in _registrations.toList())
-          registration.close(remove: false),
-      ]).timeout(effectiveTimeout);
-      _registrations.clear();
-      final delegate = _delegate;
-      _delegate = null;
-      if (delegate != null) {
-        await delegate
-            .close(timeout: effectiveTimeout)
-            .timeout(effectiveTimeout);
-      }
-    } on Object catch (error, stackTrace) {
-      failure = error;
-      failureStackTrace = stackTrace;
+        if (delegate != null)
+          guard('delegate', () => delegate.close(timeout: effectiveTimeout)),
+        for (final registration in registrations)
+          guard(
+            'subscription registration',
+            () => registration.close(remove: false),
+          ),
+      ]);
     } finally {
       _closing = false;
     }
+
     if (failure != null) {
-      Error.throwWithStackTrace(failure, failureStackTrace!);
+      Error.throwWithStackTrace(failure!, failureStackTrace!);
     }
   }
 
@@ -574,6 +593,7 @@ final class ResilientDurableJobQueue implements DurableJobQueue {
   DurableJobQueue? _delegate;
   Future<void>? _connecting;
   Future<void>? _recovery;
+  Future<void>? _closeFuture;
   Timer? _healthTimer;
   var _probeActive = false;
   var _closing = false;
@@ -621,53 +641,67 @@ final class ResilientDurableJobQueue implements DurableJobQueue {
   }
 
   @override
-  Future<void> close({Duration? timeout}) async {
-    if (_closing) {
-      return;
+  Future<void> close({Duration? timeout}) {
+    final existing = _closeFuture;
+    if (existing != null) {
+      return existing;
     }
+    final effectiveTimeout = timeout ?? policy.recoveryTimeout;
+    late final Future<void> closing;
+    closing = _closeResources(effectiveTimeout).whenComplete(() {
+      if (identical(_closeFuture, closing)) {
+        _closeFuture = null;
+      }
+    });
+    _closeFuture = closing;
+    return closing;
+  }
+
+  Future<void> _closeResources(Duration effectiveTimeout) async {
     _closing = true;
     _generation += 1;
     _stopHealthMonitor();
-    final effectiveTimeout = timeout ?? policy.recoveryTimeout;
+
+    final registrations = _registrations.toList();
+    _registrations.clear();
+    final delegate = _delegate;
+    _delegate = null;
     Object? failure;
     StackTrace? failureStackTrace;
+
+    Future<void> guard(String component, Future<void> Function() action) async {
+      try {
+        await action().timeout(
+          effectiveTimeout,
+          onTimeout: () {
+            throw MessagingTimeoutException(
+              'Durable job queue $component shutdown exceeded '
+              '$effectiveTimeout.',
+              timeout: effectiveTimeout,
+            );
+          },
+        );
+      } on Object catch (error, stackTrace) {
+        failure ??= error;
+        failureStackTrace ??= stackTrace;
+      }
+    }
+
     try {
-      final connecting = _connecting;
-      if (connecting != null) {
-        try {
-          await connecting.timeout(effectiveTimeout);
-        } on Object {
-          // A concurrent connect is cancelled or failed; cleanup continues.
-        }
-      }
-      final recovery = _recovery;
-      if (recovery != null) {
-        try {
-          await recovery.timeout(effectiveTimeout);
-        } on Object {
-          // Shutdown cancels recovery; cleanup continues with the delegate.
-        }
-      }
+      // Close proxy workers and their owning transport concurrently. Broker
+      // fetches can only unblock after the adapter closes its socket/channel.
       await Future.wait([
-        for (final registration in _registrations.toList())
-          registration.close(remove: false),
-      ]).timeout(effectiveTimeout);
-      _registrations.clear();
-      final delegate = _delegate;
-      _delegate = null;
-      if (delegate != null) {
-        await delegate
-            .close(timeout: effectiveTimeout)
-            .timeout(effectiveTimeout);
-      }
-    } on Object catch (error, stackTrace) {
-      failure = error;
-      failureStackTrace = stackTrace;
+        if (delegate != null)
+          guard('delegate', () => delegate.close(timeout: effectiveTimeout)),
+        for (final registration in registrations)
+          guard('worker registration', () => registration.close(remove: false)),
+      ]);
     } finally {
       _closing = false;
     }
+
     if (failure != null) {
-      Error.throwWithStackTrace(failure, failureStackTrace!);
+      Error.throwWithStackTrace(failure!, failureStackTrace!);
     }
   }
 
