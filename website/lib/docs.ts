@@ -2,6 +2,7 @@ import { coreConceptDocs } from '@/content/core-concepts';
 import { gettingStartedDocs } from '@/content/getting-started';
 import { integrationDocs } from '@/content/integrations';
 import { operationsDocs } from '@/content/operations';
+import { qualificationDocs } from '@/content/qualification';
 import { referenceDocs } from '@/content/reference';
 import { reliabilityDocs } from '@/content/reliability';
 import { transportDocs } from '@/content/transports';
@@ -24,6 +25,7 @@ export const docs: DocPage[] = [
   ...transportDocs,
   ...integrationDocs,
   ...operationsDocs,
+  ...qualificationDocs,
   ...referenceDocs,
 ];
 
