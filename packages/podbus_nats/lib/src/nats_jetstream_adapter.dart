@@ -86,6 +86,8 @@ final class DartNatsJetStreamAdapter implements NatsJetStreamAdapter {
   final Map<String, Completer<nats.Message<dynamic>>> _pendingPublishes = {};
   nats.JetStream? _jetStream;
   nats.Subscription<dynamic>? _publishReplySubscription;
+  // Managed by _closePublishInbox during close, drain, and reconnect.
+  // ignore: cancel_subscriptions
   StreamSubscription<nats.Message<dynamic>>? _publishReplyListener;
   String? _publishInboxPrefix;
   int _publishSequence = 0;
@@ -212,7 +214,7 @@ final class DartNatsJetStreamAdapter implements NatsJetStreamAdapter {
     _pendingPublishes[replyTo] = responseCompleter;
     final wireHeaders = <String, String>{
       ...headers,
-      if (messageId != null) 'Nats-Msg-Id': messageId,
+      'Nats-Msg-Id': ?messageId,
     };
 
     try {
@@ -247,7 +249,7 @@ final class DartNatsJetStreamAdapter implements NatsJetStreamAdapter {
       }
       final error = decoded['error'];
       if (error != null) {
-        final description = error is Map
+        final description = error is Map<String, dynamic>
             ? error['description'] ?? error.toString()
             : error.toString();
         throw StateError('NATS JetStream publish failed: $description');
