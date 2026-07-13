@@ -40,6 +40,7 @@ All notable changes to PodBus are documented here. The project follows Semantic 
 - NATS and JetStream stress publishers and consumers run in independent isolates so one event loop cannot starve all socket readers.
 - Temporary RabbitMQ subscriptions use exclusive, auto-delete queues.
 - Integration broker startup now uses explicit readiness probes and deterministic Kafka topic provisioning.
+- Serverpod example dependencies are aligned on 3.4.11.
 - GitHub Actions are pinned to immutable commits.
 - Analyzer diagnostics, stress metadata, broker logs, resource snapshots, and qualification evidence are retained as workflow artifacts.
 
