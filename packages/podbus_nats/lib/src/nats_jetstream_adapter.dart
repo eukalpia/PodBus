@@ -83,13 +83,26 @@ final class DartNatsJetStreamAdapter implements NatsJetStreamAdapter {
     : _client = client ?? nats.Client();
 
   final nats.Client _client;
+  final Map<String, Completer<nats.Message<dynamic>>> _pendingPublishes = {};
   nats.JetStream? _jetStream;
+  nats.Subscription<dynamic>? _publishReplySubscription;
+  StreamSubscription<nats.Message<dynamic>>? _publishReplyListener;
+  String? _publishInboxPrefix;
+  int _publishSequence = 0;
+  bool _closing = false;
 
   @override
-  bool get isConnected => _client.connected;
+  bool get isConnected => _client.connected && !_closing;
 
   @override
-  Future<void> close() => _client.close();
+  Future<void> close() async {
+    _closing = true;
+    await _closePublishInbox(
+      StateError('NATS JetStream adapter closed before publish confirmation.'),
+    );
+    _jetStream = null;
+    await _client.close();
+  }
 
   @override
   Future<void> connect(NatsMessagingConfig config) async {
@@ -102,17 +115,28 @@ final class DartNatsJetStreamAdapter implements NatsJetStreamAdapter {
       name: 'podbus-jetstream',
     );
 
-    await _client.connect(
-      config.servers.first,
-      servers: config.servers.length > 1
-          ? config.servers.skip(1).toList()
-          : null,
-      connectOption: connectOption,
-      timeout: config.connectTimeout.inSeconds,
-      retry: true,
-      retryCount: 3,
-    );
-    _jetStream = nats.JetStream(_client);
+    _closing = false;
+    try {
+      await _client.connect(
+        config.servers.first,
+        servers: config.servers.length > 1
+            ? config.servers.skip(1).toList()
+            : null,
+        connectOption: connectOption,
+        timeout: config.connectTimeout.inSeconds,
+        retry: true,
+        retryCount: 3,
+      );
+      _jetStream = nats.JetStream(_client);
+      await _openPublishInbox();
+    } on Object {
+      _jetStream = null;
+      await _closePublishInbox(
+        StateError('NATS JetStream adapter failed while connecting.'),
+      );
+      await _client.close();
+      rethrow;
+    }
   }
 
   @override
@@ -152,7 +176,20 @@ final class DartNatsJetStreamAdapter implements NatsJetStreamAdapter {
   }
 
   @override
-  Future<void> drain() => _client.drain();
+  Future<void> drain() async {
+    if (_pendingPublishes.isNotEmpty) {
+      await Future.wait([
+        for (final pending in _pendingPublishes.values.toList()) pending.future,
+      ]);
+    }
+    await _client.flush();
+    _closing = true;
+    await _closePublishInbox(
+      StateError('NATS JetStream adapter drained before publish confirmation.'),
+    );
+    _jetStream = null;
+    await _client.drain();
+  }
 
   @override
   Future<void> flush() => _client.flush();
@@ -165,18 +202,130 @@ final class DartNatsJetStreamAdapter implements NatsJetStreamAdapter {
     String? messageId,
     Map<String, String> headers = const {},
   }) async {
-    final ack = await _js.publish(
-      subject,
-      Uint8List.fromList(bytes),
-      timeout: timeout,
-      opts: messageId == null ? null : nats.PubOpts(msgId: messageId),
-      header: nats.Header(headers: headers),
+    final inboxPrefix = _publishInboxPrefix;
+    if (!isConnected || inboxPrefix == null) {
+      throw StateError('NATS JetStream adapter is not connected.');
+    }
+
+    final replyTo = '$inboxPrefix.${_publishSequence++}';
+    final responseCompleter = Completer<nats.Message<dynamic>>();
+    _pendingPublishes[replyTo] = responseCompleter;
+    final wireHeaders = <String, String>{
+      ...headers,
+      if (messageId != null) 'Nats-Msg-Id': messageId,
+    };
+
+    try {
+      final sent = await _client.pub(
+        subject,
+        Uint8List.fromList(bytes),
+        replyTo: replyTo,
+        buffer: false,
+        header: nats.Header(headers: wireHeaders),
+      );
+      if (!sent) {
+        throw StateError('NATS JetStream publish could not be written.');
+      }
+
+      final response = await responseCompleter.future.timeout(
+        timeout,
+        onTimeout: () => throw TimeoutException(
+          'NATS JetStream publish confirmation exceeded $timeout.',
+        ),
+      );
+      final status = response.header?.status;
+      if (status != null && status >= 300) {
+        throw StateError(
+          'NATS JetStream publish failed with status $status: '
+          '${response.string}',
+        );
+      }
+
+      final decoded = jsonDecode(response.string);
+      if (decoded is! Map<String, dynamic>) {
+        throw StateError('NATS JetStream returned an invalid publish ack.');
+      }
+      final error = decoded['error'];
+      if (error != null) {
+        final description = error is Map
+            ? error['description'] ?? error.toString()
+            : error.toString();
+        throw StateError('NATS JetStream publish failed: $description');
+      }
+      final stream = decoded['stream'];
+      final sequence = decoded['seq'];
+      if (stream is! String || sequence is! int) {
+        throw StateError('NATS JetStream returned an incomplete publish ack.');
+      }
+      return NatsJetStreamPublishAck(
+        stream: stream,
+        sequence: sequence,
+        duplicate: decoded['duplicate'] as bool? ?? false,
+      );
+    } finally {
+      _pendingPublishes.remove(replyTo);
+    }
+  }
+
+  Future<void> _openPublishInbox() async {
+    await _closePublishInbox(
+      StateError('NATS JetStream publish inbox was replaced.'),
     );
-    return NatsJetStreamPublishAck(
-      stream: ack.stream,
-      sequence: ack.sequence,
-      duplicate: ack.duplicate,
+    final nonce = DateTime.now().microsecondsSinceEpoch;
+    final identity = identityHashCode(this).abs();
+    final inboxPrefix = '_INBOX.PODBUS.JS.$nonce.$identity';
+    final subscription = _client.sub<dynamic>('$inboxPrefix.>');
+    _publishInboxPrefix = inboxPrefix;
+    _publishReplySubscription = subscription;
+    _publishReplyListener = subscription.stream.listen(
+      _handlePublishReply,
+      onError: (Object error, StackTrace stackTrace) {
+        _failPendingPublishes(error, stackTrace);
+      },
+      onDone: () {
+        if (!_closing) {
+          _failPendingPublishes(
+            StateError('NATS JetStream publish reply inbox closed.'),
+            StackTrace.current,
+          );
+        }
+      },
     );
+    await _client.flush();
+  }
+
+  void _handlePublishReply(nats.Message<dynamic> message) {
+    final subject = message.subject;
+    if (subject == null) {
+      return;
+    }
+    final completer = _pendingPublishes.remove(subject);
+    if (completer != null && !completer.isCompleted) {
+      completer.complete(message);
+    }
+  }
+
+  void _failPendingPublishes(Object error, StackTrace stackTrace) {
+    final pending = _pendingPublishes.values.toList();
+    _pendingPublishes.clear();
+    for (final completer in pending) {
+      if (!completer.isCompleted) {
+        completer.completeError(error, stackTrace);
+      }
+    }
+  }
+
+  Future<void> _closePublishInbox(Object error) async {
+    final listener = _publishReplyListener;
+    final subscription = _publishReplySubscription;
+    _publishReplyListener = null;
+    _publishReplySubscription = null;
+    _publishInboxPrefix = null;
+    _failPendingPublishes(error, StackTrace.current);
+    await listener?.cancel();
+    if (subscription != null) {
+      _client.unSub(subscription);
+    }
   }
 
   nats.JetStream get _js {
