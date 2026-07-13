@@ -100,7 +100,6 @@ final class ToxiproxyClient {
   ToxiproxyClient(this.baseUri);
 
   final Uri baseUri;
-  final HttpClient _client = HttpClient();
 
   Future<bool> isReady() async {
     try {
@@ -251,18 +250,25 @@ final class ToxiproxyClient {
     String path, {
     Map<String, Object?>? body,
   }) async {
-    final uri = baseUri.resolve(path);
-    final request = await _client
-        .openUrl(method, uri)
-        .timeout(const Duration(seconds: 3));
-    request.persistentConnection = false;
-    request.headers.contentType = ContentType.json;
-    if (body != null) {
-      request.write(jsonEncode(body));
+    final client = HttpClient();
+    try {
+      final uri = baseUri.resolve(path);
+      final request = await client
+          .openUrl(method, uri)
+          .timeout(const Duration(seconds: 3));
+      request.persistentConnection = false;
+      request.headers.contentType = ContentType.json;
+      if (body != null) {
+        request.write(jsonEncode(body));
+      }
+      final response = await request.close().timeout(
+        const Duration(seconds: 5),
+      );
+      final responseBody = await utf8.decoder.bind(response).join();
+      return _HttpResult(response.statusCode, responseBody);
+    } finally {
+      client.close(force: true);
     }
-    final response = await request.close().timeout(const Duration(seconds: 5));
-    final responseBody = await utf8.decoder.bind(response).join();
-    return _HttpResult(response.statusCode, responseBody);
   }
 
   void _expectSuccess(_HttpResult response, String action) {
