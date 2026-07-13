@@ -201,45 +201,44 @@ final class ResilientMessageBus implements MessageBus {
     _generation += 1;
     _stopHealthMonitor();
     final effectiveTimeout = timeout ?? policy.recoveryTimeout;
+    final deadline = DateTime.now().add(effectiveTimeout);
     Object? failure;
     StackTrace? failureStackTrace;
+
+    void captureFailure(Object error, StackTrace stackTrace) {
+      failure ??= error;
+      failureStackTrace ??= stackTrace;
+    }
+
     try {
-      final connecting = _connecting;
-      if (connecting != null) {
-        try {
-          await connecting.timeout(effectiveTimeout);
-        } on Object {
-          // A concurrent connect is cancelled or failed; cleanup continues.
-        }
-      }
-      final recovery = _recovery;
-      if (recovery != null) {
-        try {
-          await recovery.timeout(effectiveTimeout);
-        } on Object {
-          // Shutdown cancels recovery; cleanup continues with the delegate.
-        }
-      }
       await Future.wait([
-        for (final registration in _registrations.toList())
-          registration.close(remove: false),
-      ]).timeout(effectiveTimeout);
+        if (_connecting case final connecting?)
+          _ignoreUntilDeadline(connecting, deadline),
+        if (_recovery case final recovery?)
+          _ignoreUntilDeadline(recovery, deadline),
+      ]);
+
+      final registrations = _registrations.toList();
       _registrations.clear();
       final delegate = _delegate;
       _delegate = null;
-      if (delegate != null) {
-        await delegate
-            .close(timeout: effectiveTimeout)
-            .timeout(effectiveTimeout);
+      final cleanup = Future.wait<void>([
+        for (final registration in registrations)
+          registration.close(remove: false),
+        if (delegate != null) delegate.close(timeout: effectiveTimeout),
+      ], eagerError: false);
+      try {
+        await cleanup.timeout(_remainingUntil(deadline));
+      } on Object catch (error, stackTrace) {
+        captureFailure(error, stackTrace);
       }
     } on Object catch (error, stackTrace) {
-      failure = error;
-      failureStackTrace = stackTrace;
+      captureFailure(error, stackTrace);
     } finally {
       _closing = false;
     }
     if (failure != null) {
-      Error.throwWithStackTrace(failure, failureStackTrace!);
+      Error.throwWithStackTrace(failure!, failureStackTrace!);
     }
   }
 
@@ -623,45 +622,44 @@ final class ResilientDurableJobQueue implements DurableJobQueue {
     _generation += 1;
     _stopHealthMonitor();
     final effectiveTimeout = timeout ?? policy.recoveryTimeout;
+    final deadline = DateTime.now().add(effectiveTimeout);
     Object? failure;
     StackTrace? failureStackTrace;
+
+    void captureFailure(Object error, StackTrace stackTrace) {
+      failure ??= error;
+      failureStackTrace ??= stackTrace;
+    }
+
     try {
-      final connecting = _connecting;
-      if (connecting != null) {
-        try {
-          await connecting.timeout(effectiveTimeout);
-        } on Object {
-          // A concurrent connect is cancelled or failed; cleanup continues.
-        }
-      }
-      final recovery = _recovery;
-      if (recovery != null) {
-        try {
-          await recovery.timeout(effectiveTimeout);
-        } on Object {
-          // Shutdown cancels recovery; cleanup continues with the delegate.
-        }
-      }
       await Future.wait([
-        for (final registration in _registrations.toList())
-          registration.close(remove: false),
-      ]).timeout(effectiveTimeout);
+        if (_connecting case final connecting?)
+          _ignoreUntilDeadline(connecting, deadline),
+        if (_recovery case final recovery?)
+          _ignoreUntilDeadline(recovery, deadline),
+      ]);
+
+      final registrations = _registrations.toList();
       _registrations.clear();
       final delegate = _delegate;
       _delegate = null;
-      if (delegate != null) {
-        await delegate
-            .close(timeout: effectiveTimeout)
-            .timeout(effectiveTimeout);
+      final cleanup = Future.wait<void>([
+        for (final registration in registrations)
+          registration.close(remove: false),
+        if (delegate != null) delegate.close(timeout: effectiveTimeout),
+      ], eagerError: false);
+      try {
+        await cleanup.timeout(_remainingUntil(deadline));
+      } on Object catch (error, stackTrace) {
+        captureFailure(error, stackTrace);
       }
     } on Object catch (error, stackTrace) {
-      failure = error;
-      failureStackTrace = stackTrace;
+      captureFailure(error, stackTrace);
     } finally {
       _closing = false;
     }
     if (failure != null) {
-      Error.throwWithStackTrace(failure, failureStackTrace!);
+      Error.throwWithStackTrace(failure!, failureStackTrace!);
     }
   }
 

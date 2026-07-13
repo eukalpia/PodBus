@@ -3,9 +3,9 @@ PodBus 0.1.0-beta.1 final qualification
 Requested: 2026-07-13 Asia/Tashkent
 Branch: docs/beta-candidate-evidence
 Qualified runtime baseline: 784b3d533f4ea962324394c31ea4712c1a5e8c47
-Release-candidate parent before marker: d5032cd1a32f9d95afd6268c6b2fc79819e743a7
+Release-candidate parent before marker: 63cd7ea654f208a40a3eec9ae80a86c7c52241f0
 
-Mandatory evidence for the marker commit:
+Mandatory evidence for the generated commit:
 - complete format, analyzer, unit, coverage, package metadata, compatibility, and security gates;
 - NATS, RabbitMQ, Kafka, and PostgreSQL Docker-backed integration suites;
 - plain Dart process deployment and graceful shutdown;
@@ -17,4 +17,4 @@ Mandatory evidence for the marker commit:
 - retained machine-readable reports, machine metadata, broker logs, and resource diagnostics;
 - package, website, README, changelog, and release-tag version agreement on 0.1.0-beta.1.
 
-Do not tag or describe this revision as qualified unless every mandatory gate above passes for the marker commit itself.
+Do not tag or describe this revision as qualified unless every mandatory gate above passes for the generated commit itself.
