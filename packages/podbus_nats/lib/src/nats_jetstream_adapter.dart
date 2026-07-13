@@ -187,7 +187,9 @@ final class DartNatsJetStreamAdapter implements NatsJetStreamAdapter {
       }
       await _client.flush();
       await _closePublishInbox(
-        StateError('NATS JetStream adapter drained before publish confirmation.'),
+        StateError(
+          'NATS JetStream adapter drained before publish confirmation.',
+        ),
       );
       _jetStream = null;
       await _client.drain();
