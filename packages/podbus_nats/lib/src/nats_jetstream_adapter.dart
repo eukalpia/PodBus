@@ -83,7 +83,7 @@ final class DartNatsJetStreamAdapter implements NatsJetStreamAdapter {
     : _client = client ?? nats.Client();
 
   final nats.Client _client;
-  final Map<String, Completer<nats.Message<dynamic>>> _pendingPublishes = {};
+  final Map<String, _PendingPublish> _pendingPublishes = {};
   nats.JetStream? _jetStream;
   nats.Subscription<dynamic>? _publishReplySubscription;
   // Managed by _closePublishInbox during close, drain, and reconnect.
@@ -179,18 +179,29 @@ final class DartNatsJetStreamAdapter implements NatsJetStreamAdapter {
 
   @override
   Future<void> drain() async {
-    if (_pendingPublishes.isNotEmpty) {
-      await Future.wait([
-        for (final pending in _pendingPublishes.values.toList()) pending.future,
-      ]);
-    }
-    await _client.flush();
     _closing = true;
-    await _closePublishInbox(
-      StateError('NATS JetStream adapter drained before publish confirmation.'),
-    );
-    _jetStream = null;
-    await _client.drain();
+    try {
+      final pending = _pendingPublishes.values.toList();
+      if (pending.isNotEmpty) {
+        await Future.wait([for (final publish in pending) publish.wait()]);
+      }
+      await _client.flush();
+      await _closePublishInbox(
+        StateError('NATS JetStream adapter drained before publish confirmation.'),
+      );
+      _jetStream = null;
+      await _client.drain();
+    } on Object catch (error, stackTrace) {
+      await _closePublishInbox(
+        StateError(
+          'NATS JetStream drain failed before all confirmations completed: '
+          '$error',
+        ),
+      );
+      _jetStream = null;
+      await _client.close();
+      Error.throwWithStackTrace(error, stackTrace);
+    }
   }
 
   @override
@@ -210,8 +221,8 @@ final class DartNatsJetStreamAdapter implements NatsJetStreamAdapter {
     }
 
     final replyTo = '$inboxPrefix.${_publishSequence++}';
-    final responseCompleter = Completer<nats.Message<dynamic>>();
-    _pendingPublishes[replyTo] = responseCompleter;
+    final pending = _PendingPublish(timeout);
+    _pendingPublishes[replyTo] = pending;
     final wireHeaders = <String, String>{...headers, 'Nats-Msg-Id': ?messageId};
 
     try {
@@ -226,12 +237,7 @@ final class DartNatsJetStreamAdapter implements NatsJetStreamAdapter {
         throw StateError('NATS JetStream publish could not be written.');
       }
 
-      final response = await responseCompleter.future.timeout(
-        timeout,
-        onTimeout: () => throw TimeoutException(
-          'NATS JetStream publish confirmation exceeded $timeout.',
-        ),
-      );
+      final response = await pending.wait();
       final status = response.header?.status;
       if (status != null && status >= 300) {
         throw StateError(
@@ -298,18 +304,18 @@ final class DartNatsJetStreamAdapter implements NatsJetStreamAdapter {
     if (subject == null) {
       return;
     }
-    final completer = _pendingPublishes.remove(subject);
-    if (completer != null && !completer.isCompleted) {
-      completer.complete(message);
+    final pending = _pendingPublishes.remove(subject);
+    if (pending != null && !pending.completer.isCompleted) {
+      pending.completer.complete(message);
     }
   }
 
   void _failPendingPublishes(Object error, StackTrace stackTrace) {
     final pending = _pendingPublishes.values.toList();
     _pendingPublishes.clear();
-    for (final completer in pending) {
-      if (!completer.isCompleted) {
-        completer.completeError(error, stackTrace);
+    for (final publish in pending) {
+      if (!publish.completer.isCompleted) {
+        publish.completer.completeError(error, stackTrace);
       }
     }
   }
@@ -333,6 +339,35 @@ final class DartNatsJetStreamAdapter implements NatsJetStreamAdapter {
       throw StateError('NATS JetStream adapter is not connected.');
     }
     return jetStream;
+  }
+}
+
+final class _PendingPublish {
+  _PendingPublish(this.timeout)
+    : deadline = DateTime.now().add(timeout),
+      completer = Completer<nats.Message<dynamic>>();
+
+  final Duration timeout;
+  final DateTime deadline;
+  final Completer<nats.Message<dynamic>> completer;
+
+  Future<nats.Message<dynamic>> wait() {
+    final remaining = deadline.difference(DateTime.now());
+    if (remaining <= Duration.zero) {
+      return Future<nats.Message<dynamic>>.error(
+        TimeoutException(
+          'NATS JetStream publish confirmation exceeded $timeout.',
+          timeout,
+        ),
+      );
+    }
+    return completer.future.timeout(
+      remaining,
+      onTimeout: () => throw TimeoutException(
+        'NATS JetStream publish confirmation exceeded $timeout.',
+        timeout,
+      ),
+    );
   }
 }
 
