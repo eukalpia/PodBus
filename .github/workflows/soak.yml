@@ -50,7 +50,7 @@ jobs:
           fi
           changed="$(git diff --name-only HEAD^ HEAD)"
           printf '%s\n' "$changed"
-          if grep -Eq '^(packages/podbus_(core|nats|rabbitmq)/|tool/(soak_resilience|fault_|src/fault_harness|ci/(start_integration_services|capture_rabbitmq_state|wait_for_rabbitmq)|qualification/beta-candidate)|docker-compose\.integration\.yaml$)' <<< "$changed"; then
+          if grep -Eq '^(packages/podbus_(core|nats|rabbitmq)/|tool/(soak_resilience|fault_|src/fault_harness|ci/(start_integration_services|capture_rabbitmq_state|wait_for_rabbitmq)|qualification/beta-candidate)|docker-compose\.integration\.yaml$|\.github/workflows/soak\.yml$)' <<< "$changed"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -95,11 +95,23 @@ jobs:
           bash tool/ci/wait_for_rabbitmq.sh
           bash tool/ci/wait_for_toxiproxy.sh
       - name: Run resilience soak
-        run: >-
-          dart run tool/soak_resilience.dart
-          --duration=${SOAK_DURATION}
-          --allow-short=${ALLOW_SHORT}
-          --report=test-results/soak-summary.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          duration_seconds="$(python3 - <<'PY'
+          import os, re
+          value = os.environ['SOAK_DURATION']
+          amount, unit = re.fullmatch(r'(\d+)(ms|s|m|h)', value).groups()
+          seconds = int(amount) * {'ms': .001, 's': 1, 'm': 60, 'h': 3600}[unit]
+          print(max(1, int(seconds)))
+          PY
+          )"
+          watchdog_seconds=$((duration_seconds + 600))
+          timeout --signal=TERM --kill-after=30s "${watchdog_seconds}s" \
+            dart run tool/soak_resilience.dart \
+              --duration="${SOAK_DURATION}" \
+              --allow-short="${ALLOW_SHORT}" \
+              --report=test-results/soak-summary.json
       - name: Publish soak summary
         if: always()
         shell: bash
