@@ -1,0 +1,135 @@
+name: Diagnose fault process leak
+
+on:
+  pull_request:
+    paths:
+      - "tool/qualification/trigger-fault-leak-diagnostic.txt"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diagnose-fault-process-leak
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    name: diagnose / ${{ matrix.scenario }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - nats-tcp-partition
+          - rabbitmq-tcp-partition
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: docs/beta-candidate-evidence
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260
+        with:
+          sdk: 3.12.0
+      - name: Resolve dependencies
+        run: dart pub get
+      - name: Start brokers and Toxiproxy
+        run: |
+          bash tool/ci/start_integration_services.sh nats rabbitmq toxiproxy
+          bash tool/ci/wait_for_nats.sh
+          bash tool/ci/wait_for_rabbitmq.sh
+          bash tool/ci/wait_for_toxiproxy.sh
+      - name: Run scenario and inspect surviving process
+        shell: bash
+        env:
+          SCENARIO: ${{ matrix.scenario }}
+        run: |
+          set -u
+          mkdir -p test-results
+          report="test-results/${SCENARIO}.json"
+          log="test-results/${SCENARIO}.log"
+          dart --observe=127.0.0.1:8181 --disable-service-auth-codes \
+            run tool/fault_suite.dart \
+              --profile=smoke \
+              --scenario="$SCENARIO" \
+              --report="$report" \
+            >"$log" 2>&1 &
+          pid=$!
+          echo "$pid" > test-results/dart.pid
+
+          for _ in $(seq 1 120); do
+            if [[ -s "$report" ]]; then break; fi
+            if ! kill -0 "$pid" 2>/dev/null; then break; fi
+            sleep 1
+          done
+
+          {
+            echo "pid=$pid"
+            echo "report_present=$([[ -s "$report" ]] && echo yes || echo no)"
+            echo "alive_after_report=$(kill -0 "$pid" 2>/dev/null && echo yes || echo no)"
+            echo "--- ps ---"
+            ps -o pid,ppid,stat,etime,wchan:32,cmd -p "$pid" || true
+            echo "--- status ---"
+            cat "/proc/$pid/status" 2>/dev/null || true
+            echo "--- fd links ---"
+            for fd in /proc/$pid/fd/*; do
+              printf '%s -> ' "$fd"
+              readlink "$fd" || true
+            done
+            echo "--- lsof ---"
+            lsof -nP -p "$pid" 2>&1 || true
+            echo "--- sockets ---"
+            ss -tpna 2>&1 | grep -E "pid=$pid|127.0.0.1:(14222|15670|8474|4222|5672)" || true
+            echo "--- proc net tcp ---"
+            cat "/proc/$pid/net/tcp" 2>/dev/null || true
+            cat "/proc/$pid/net/tcp6" 2>/dev/null || true
+          } > test-results/process-state.txt 2>&1
+
+          curl -fsS http://127.0.0.1:8181/getVM \
+            > test-results/vm.json 2>test-results/vm-error.txt || true
+          python3 - <<'PY'
+          import json, pathlib, urllib.request
+          vm_path = pathlib.Path('test-results/vm.json')
+          if not vm_path.exists() or not vm_path.read_text().strip():
+              raise SystemExit(0)
+          try:
+              vm = json.loads(vm_path.read_text())
+          except Exception:
+              raise SystemExit(0)
+          isolates = vm.get('result', vm).get('isolates', [])
+          for index, isolate in enumerate(isolates):
+              isolate_id = isolate.get('id')
+              if not isolate_id:
+                  continue
+              for method in ('getIsolate', 'getStack'):
+                  url = f'http://127.0.0.1:8181/{method}?isolateId={isolate_id}'
+                  try:
+                      data = urllib.request.urlopen(url, timeout=5).read()
+                  except Exception as exc:
+                      data = str(exc).encode()
+                  pathlib.Path(f'test-results/{method}-{index}.json').write_bytes(data)
+          PY
+
+          sleep 5
+          echo "alive_five_seconds_later=$(kill -0 "$pid" 2>/dev/null && echo yes || echo no)" \
+            >> test-results/process-state.txt
+          kill -TERM "$pid" 2>/dev/null || true
+          sleep 2
+          kill -KILL "$pid" 2>/dev/null || true
+          wait "$pid" 2>/dev/null || true
+          cat "$log"
+      - name: Capture broker logs
+        if: always()
+        run: |
+          docker compose -f docker-compose.integration.yaml logs --no-color \
+            nats rabbitmq toxiproxy > test-results/brokers.log 2>&1 || true
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fault-leak-${{ matrix.scenario }}
+          path: test-results
+          if-no-files-found: error
+          retention-days: 7
+      - name: Stop services
+        if: always()
+        run: docker compose -f docker-compose.integration.yaml down -v --remove-orphans
