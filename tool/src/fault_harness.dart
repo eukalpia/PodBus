@@ -255,6 +255,7 @@ final class ToxiproxyClient {
     final request = await _client
         .openUrl(method, uri)
         .timeout(const Duration(seconds: 3));
+    request.persistentConnection = false;
     request.headers.contentType = ContentType.json;
     if (body != null) {
       request.write(jsonEncode(body));
