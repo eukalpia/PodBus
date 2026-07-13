@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dart_nats/dart_nats.dart' as nats;
@@ -110,7 +109,7 @@ final class _FakeNatsClient extends nats.Client {
     bool retry = true,
     int retryInterval = 10,
     int retryCount = 3,
-    SecurityContext? securityContext,
+    Object? securityContext,
   }) async {
     _connected = true;
   }
