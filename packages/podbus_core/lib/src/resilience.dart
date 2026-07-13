@@ -484,12 +484,16 @@ final class ResilientMessageBus implements MessageBus {
     if (delegate == null) {
       return;
     }
+    final generation = _generation;
     _probeActive = true;
     try {
       final result = await delegate.healthCheck().timeout(
         policy.healthCheckTimeout,
       );
-      if (result.status == HealthStatus.unhealthy && !_closing) {
+      if (result.status == HealthStatus.unhealthy &&
+          !_closing &&
+          generation == _generation &&
+          identical(delegate, _delegate)) {
         await _recover(
           MessagingConnectionException(
             'Message bus health probe reported an unhealthy transport: '
@@ -498,7 +502,9 @@ final class ResilientMessageBus implements MessageBus {
         );
       }
     } on Object catch (error) {
-      if (!_closing) {
+      if (!_closing &&
+          generation == _generation &&
+          identical(delegate, _delegate)) {
         try {
           await _recover(
             MessagingConnectionException(
@@ -907,12 +913,16 @@ final class ResilientDurableJobQueue implements DurableJobQueue {
     if (delegate == null) {
       return;
     }
+    final generation = _generation;
     _probeActive = true;
     try {
       final result = await delegate.healthCheck().timeout(
         policy.healthCheckTimeout,
       );
-      if (result.status == HealthStatus.unhealthy && !_closing) {
+      if (result.status == HealthStatus.unhealthy &&
+          !_closing &&
+          generation == _generation &&
+          identical(delegate, _delegate)) {
         await _recover(
           MessagingConnectionException(
             'Durable queue health probe reported an unhealthy transport: '
@@ -921,7 +931,9 @@ final class ResilientDurableJobQueue implements DurableJobQueue {
         );
       }
     } on Object catch (error) {
-      if (!_closing) {
+      if (!_closing &&
+          generation == _generation &&
+          identical(delegate, _delegate)) {
         try {
           await _recover(
             MessagingConnectionException(

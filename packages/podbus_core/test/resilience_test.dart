@@ -322,9 +322,72 @@ void main() {
       await publish;
       await bus.close();
     });
+
+    test('ignores a health probe completed after message-bus close', () async {
+      final gate = Completer<HealthCheckResult>();
+      final delegates = <_FakeMessageBus>[];
+      final bus = ResilientMessageBus(
+        factory: () {
+          final value = _FakeMessageBus(
+            healthGate: delegates.isEmpty ? gate.future : null,
+          );
+          delegates.add(value);
+          return value;
+        },
+        policy: const ReconnectPolicy(
+          initialDelay: Duration.zero,
+          maxDelay: Duration.zero,
+          jitter: 0,
+          healthCheckInterval: Duration(milliseconds: 1),
+          healthCheckTimeout: Duration(seconds: 1),
+        ),
+      );
+
+      await bus.connect();
+      await _waitUntil(() => delegates.first.healthChecks > 0);
+      await bus.close(timeout: const Duration(milliseconds: 100));
+      gate.complete(HealthCheckResult.unhealthy(message: 'late'));
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+
+      expect(delegates, hasLength(1));
+      await bus.close();
+    });
   });
 
   group('ResilientDurableJobQueue', () {
+    test(
+      'ignores a health probe completed after durable-queue close',
+      () async {
+        final gate = Completer<HealthCheckResult>();
+        final delegates = <_FakeDurableQueue>[];
+        final queue = ResilientDurableJobQueue(
+          factory: () {
+            final value = _FakeDurableQueue(
+              healthGate: delegates.isEmpty ? gate.future : null,
+            );
+            delegates.add(value);
+            return value;
+          },
+          policy: const ReconnectPolicy(
+            initialDelay: Duration.zero,
+            maxDelay: Duration.zero,
+            jitter: 0,
+            healthCheckInterval: Duration(milliseconds: 1),
+            healthCheckTimeout: Duration(seconds: 1),
+          ),
+        );
+
+        await queue.connect();
+        await _waitUntil(() => delegates.first.healthChecks > 0);
+        await queue.close(timeout: const Duration(milliseconds: 100));
+        gate.complete(HealthCheckResult.unhealthy(message: 'late'));
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+
+        expect(delegates, hasLength(1));
+        await queue.close();
+      },
+    );
+
     test(
       'proactively recovers unhealthy delegates and restores workers',
       () async {
@@ -526,12 +589,14 @@ final class _FakeMessageBus implements MessageBus {
   _FakeMessageBus({
     this.connectGate,
     this.closeGate,
+    this.healthGate,
     this.connectError,
     this.subscribeError,
   });
 
   final Future<void>? connectGate;
   final Future<void>? closeGate;
+  final Future<HealthCheckResult>? healthGate;
   final Object? connectError;
   final Object? subscribeError;
   final List<String> publishedSubjects = [];
@@ -542,6 +607,7 @@ final class _FakeMessageBus implements MessageBus {
   bool connected = false;
   bool closed = false;
   int closedSubscriptions = 0;
+  int healthChecks = 0;
 
   int get subscriptionCount => subscriptions.length;
 
@@ -623,6 +689,11 @@ final class _FakeMessageBus implements MessageBus {
 
   @override
   Future<HealthCheckResult> healthCheck() async {
+    healthChecks += 1;
+    final gate = healthGate;
+    if (gate != null) {
+      return gate;
+    }
     return connected
         ? HealthCheckResult.healthy(message: 'connected')
         : HealthCheckResult.unhealthy(message: 'disconnected');
@@ -650,16 +721,23 @@ final class _FakeSubscription implements Subscription {
 }
 
 final class _FakeDurableQueue implements DurableJobQueue {
-  _FakeDurableQueue({this.connectGate, this.closeGate, this.connectError});
+  _FakeDurableQueue({
+    this.connectGate,
+    this.closeGate,
+    this.healthGate,
+    this.connectError,
+  });
 
   final Future<void>? connectGate;
   final Future<void>? closeGate;
+  final Future<HealthCheckResult>? healthGate;
   final Object? connectError;
   final List<_FakeWorker> workers = [];
   bool connected = false;
   bool closed = false;
   bool failNextEnqueue = false;
   int closedWorkers = 0;
+  int healthChecks = 0;
 
   int get workerCount => workers.length;
 
@@ -732,6 +810,11 @@ final class _FakeDurableQueue implements DurableJobQueue {
 
   @override
   Future<HealthCheckResult> healthCheck() async {
+    healthChecks += 1;
+    final gate = healthGate;
+    if (gate != null) {
+      return gate;
+    }
     return connected
         ? HealthCheckResult.healthy(message: 'connected')
         : HealthCheckResult.unhealthy(message: 'disconnected');
