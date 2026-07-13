@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dart_nats/dart_nats.dart' as nats;
+import 'package:podbus_core/podbus_core.dart';
 
 import 'config.dart';
 
@@ -219,7 +220,9 @@ final class DartNatsJetStreamAdapter implements NatsJetStreamAdapter {
   }) async {
     final inboxPrefix = _publishInboxPrefix;
     if (!isConnected || inboxPrefix == null) {
-      throw StateError('NATS JetStream adapter is not connected.');
+      throw const MessagingConnectionException(
+        'NATS JetStream adapter is not connected.',
+      );
     }
 
     final replyTo = '$inboxPrefix.${_publishSequence++}';
@@ -236,7 +239,9 @@ final class DartNatsJetStreamAdapter implements NatsJetStreamAdapter {
         header: nats.Header(headers: wireHeaders),
       );
       if (!sent) {
-        throw StateError('NATS JetStream publish could not be written.');
+        throw const MessagingConnectionException(
+          'NATS JetStream publish could not be written.',
+        );
       }
 
       final response = await pending.wait();
@@ -268,6 +273,19 @@ final class DartNatsJetStreamAdapter implements NatsJetStreamAdapter {
         stream: stream,
         sequence: sequence,
         duplicate: decoded['duplicate'] as bool? ?? false,
+      );
+    } on TimeoutException catch (error, stackTrace) {
+      throw MessagingTimeoutException(
+        'NATS JetStream publish confirmation exceeded $timeout.',
+        timeout: timeout,
+        cause: error,
+        stackTrace: stackTrace,
+      );
+    } on nats.NatsException catch (error, stackTrace) {
+      throw MessagingConnectionException(
+        'NATS JetStream connection failed while publishing.',
+        cause: error,
+        stackTrace: stackTrace,
       );
     } finally {
       _pendingPublishes.remove(replyTo);

@@ -424,6 +424,11 @@ final class ResilientMessageBus implements MessageBus {
                 await registration.bind(replacement);
               }
             }
+            if (_closing || generation != _generation) {
+              throw const MessagingConnectionException(
+                'Message bus recovery was cancelled during registration restore.',
+              );
+            }
             _delegate = replacement;
             replacement = null;
             _lastRecoveryError = null;
@@ -867,6 +872,11 @@ final class ResilientDurableJobQueue implements DurableJobQueue {
               if (!registration.isClosed) {
                 await registration.bind(replacement);
               }
+            }
+            if (_closing || generation != _generation) {
+              throw const MessagingConnectionException(
+                'Durable queue recovery was cancelled during worker restore.',
+              );
             }
             _delegate = replacement;
             replacement = null;
