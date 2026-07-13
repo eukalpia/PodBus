@@ -59,7 +59,9 @@ void main(List<String> arguments) {
 
   final version = versions.values.isEmpty ? null : versions.values.first;
   if (version != null && !_semanticVersion.hasMatch(version)) {
-    failures.add('Package version is not valid semantic version syntax: $version.');
+    failures.add(
+      'Package version is not valid semantic version syntax: $version.',
+    );
   }
 
   for (final requiredPath in const [
@@ -96,11 +98,14 @@ void main(List<String> arguments) {
       description: 'the website version',
     );
 
-    final tag = _requestedTag(arguments) ?? Platform.environment['GITHUB_REF_NAME'];
+    final tag =
+        _requestedTag(arguments) ?? Platform.environment['GITHUB_REF_NAME'];
     if (tag != null && tag.isNotEmpty && tag.startsWith('v')) {
       final expectedTag = 'v$version';
       if (tag != expectedTag) {
-        failures.add('Release tag $tag does not match package version $expectedTag.');
+        failures.add(
+          'Release tag $tag does not match package version $expectedTag.',
+        );
       }
     }
   }
