@@ -212,10 +212,7 @@ final class DartNatsJetStreamAdapter implements NatsJetStreamAdapter {
     final replyTo = '$inboxPrefix.${_publishSequence++}';
     final responseCompleter = Completer<nats.Message<dynamic>>();
     _pendingPublishes[replyTo] = responseCompleter;
-    final wireHeaders = <String, String>{
-      ...headers,
-      'Nats-Msg-Id': ?messageId,
-    };
+    final wireHeaders = <String, String>{...headers, 'Nats-Msg-Id': ?messageId};
 
     try {
       final sent = await _client.pub(
