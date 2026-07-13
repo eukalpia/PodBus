@@ -1,1 +1,1 @@
-Capture file descriptors, sockets, and VM-service state after a successful fault scenario whose Dart process remains alive.
+Capture file descriptors and TCP sockets five seconds after a successful fault scenario, without enabling the Dart VM service.
