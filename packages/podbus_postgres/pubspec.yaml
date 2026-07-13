@@ -1,6 +1,6 @@
 name: podbus_postgres
 description: PostgreSQL outbox, inbox, and persistent idempotency for PodBus.
-version: 0.1.0-alpha.1
+version: 0.1.0-beta.1
 repository: https://github.com/eukalpia/PodBus
 publish_to: none
 
