@@ -1,3 +1,4 @@
+# One-shot executor for the validated late-probe shutdown race fix.
 name: Apply health-probe shutdown fix
 
 on:
