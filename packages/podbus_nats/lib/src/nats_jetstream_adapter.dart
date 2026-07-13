@@ -276,9 +276,7 @@ final class DartNatsJetStreamAdapter implements NatsJetStreamAdapter {
     await _closePublishInbox(
       StateError('NATS JetStream publish inbox was replaced.'),
     );
-    final nonce = DateTime.now().microsecondsSinceEpoch;
-    final identity = identityHashCode(this).abs();
-    final inboxPrefix = '_INBOX.PODBUS.JS.$nonce.$identity';
+    final inboxPrefix = nats.newInbox(inboxPrefix: '_INBOX.PODBUS.JS');
     final subscription = _client.sub<dynamic>('$inboxPrefix.>');
     _publishInboxPrefix = inboxPrefix;
     _publishReplySubscription = subscription;
