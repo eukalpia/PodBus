@@ -1,0 +1,58 @@
+name: Execute timeout contract test fix
+
+on:
+  pull_request:
+    paths:
+      - "tool/qualification/trigger-timeout-contract-test-fix.txt"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: execute-timeout-contract-test-fix
+  cancel-in-progress: true
+
+jobs:
+  patch-validate-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: docs/beta-candidate-evidence
+          fetch-depth: 0
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260
+        with:
+          sdk: 3.12.0
+      - name: Apply timeout-contract test patch
+        run: |
+          git fetch origin main
+          git show origin/main:tool/ci/apply_timeout_contract_test_fix.py > /tmp/apply_timeout_contract_test_fix.py
+          python3 /tmp/apply_timeout_contract_test_fix.py
+      - name: Validate full unit and release checks
+        run: |
+          dart pub get
+          dart format packages/podbus_nats/test/nats_jetstream_adapter_test.dart
+          git diff --check
+          dart analyze .
+          mkdir -p coverage
+          dart test \
+            packages/podbus_core/test \
+            packages/podbus_nats/test \
+            packages/podbus_rabbitmq/test \
+            packages/podbus_kafka/test \
+            packages/podbus_postgres/test \
+            packages/podbus_observability/test \
+            packages/podbus_serverpod/test \
+            --exclude-tags=integration \
+            --coverage=coverage
+          dart run tool/check_coverage.dart --directory coverage --minimum 45
+          dart run tool/verify_release.dart --check
+      - name: Publish test-only fix
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add packages/podbus_nats/test/nats_jetstream_adapter_test.dart
+          git commit -m "Align JetStream timeout test with PodBus contract"
+          git push origin HEAD:automation/test-contract-fix --force-with-lease
