@@ -68,7 +68,7 @@ const transports = [
   },
   {
     name: 'RabbitMQ',
-    status: 'Beta',
+    status: 'Beta candidate',
     slug: 'rabbitmq',
     text: 'Topic routing, publisher confirms, bounded consumers, TTL/DLX retries, and dead letters.',
   },
@@ -77,6 +77,25 @@ const transports = [
     status: 'Experimental',
     slug: 'kafka',
     text: 'Append-only event streams and consumer groups through PodBus-owned librdkafka bindings.',
+  },
+];
+
+const qualificationProofs = [
+  {
+    title: '3.25 million',
+    text: 'Mandatory messages completed across NATS Core, JetStream, and RabbitMQ on one pinned revision.',
+  },
+  {
+    title: '12 fault paths',
+    text: 'Partitions, crashes, channel failures, confirmation loss, multi-replica workers, and slow consumers.',
+  },
+  {
+    title: '1-hour soak',
+    text: 'Continuous NATS and RabbitMQ traffic with disruption, recovery, shutdown, and retained evidence.',
+  },
+  {
+    title: '2 Dart tracks',
+    text: 'Static analysis and unit tests run on Dart 3.12.0 and the current stable SDK.',
   },
 ];
 
@@ -107,6 +126,9 @@ export default function HomePage() {
             <div className="hero-actions">
               <Link className="primary-button" href="/docs/quick-start">
                 Get started <ChevronRightIcon />
+              </Link>
+              <Link className="secondary-button" href="/docs/beta-qualification">
+                View qualification <ChevronRightIcon />
               </Link>
               <a className="secondary-button" href={siteConfig.repository}>
                 View source <ArrowUpRightIcon />
@@ -144,6 +166,32 @@ export default function HomePage() {
           <div><strong>4</strong><span>infrastructure integrations</span></div>
           <div><strong>{documentationCount}</strong><span>documentation guides</span></div>
           <div><strong>0</strong><span>exactly-once claims</span></div>
+        </div>
+      </section>
+
+      <section className="home-section home-surface-section">
+        <div className="page-shell">
+          <header className="home-heading docs-home-heading">
+            <div>
+              <span>Beta candidate</span>
+              <h2>Evidence before adjectives.</h2>
+            </div>
+            <p>
+              Every qualification claim is tied to one revision, one workload,
+              one acknowledgement contract, and retained CI evidence.
+            </p>
+          </header>
+          <div className="principle-grid">
+            {qualificationProofs.map((proof) => (
+              <article key={proof.title} className="principle-card">
+                <h3>{proof.title}</h3>
+                <p>{proof.text}</p>
+              </article>
+            ))}
+          </div>
+          <Link className="text-link" href="/docs/beta-qualification">
+            Inspect the complete qualification <ChevronRightIcon />
+          </Link>
         </div>
       </section>
 
