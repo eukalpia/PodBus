@@ -45,4 +45,4 @@ Dependency review requires the repository dependency graph. A failing review bec
 
 ## Releases
 
-Create releases only from signed or protected tags matching the workspace version, for example `v0.1.0-alpha.1`. Do not move a published tag. If a release is wrong, publish a new version.
+Create releases only from signed or protected tags matching the workspace version, for example `v0.1.0-beta.1`. Do not move a published tag. If a release is wrong, publish a new version.
