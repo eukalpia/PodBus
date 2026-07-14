@@ -274,7 +274,9 @@ final class ToxiproxyClient {
       );
       socket.setOption(SocketOption.tcpNoDelay, true);
 
-      final payload = body == null ? const <int>[] : utf8.encode(jsonEncode(body));
+      final payload = body == null
+          ? const <int>[]
+          : utf8.encode(jsonEncode(body));
       final target = uri.hasQuery ? '${uri.path}?${uri.query}' : uri.path;
       final request = StringBuffer()
         ..write('$method ${target.isEmpty ? '/' : target} HTTP/1.1\r\n')
@@ -322,7 +324,8 @@ final class ToxiproxyClient {
       }
     }
     final bodyBytes = bytes.sublist(separator + 4);
-    final responseBody = headers['transfer-encoding']?.toLowerCase() == 'chunked'
+    final responseBody =
+        headers['transfer-encoding']?.toLowerCase() == 'chunked'
         ? utf8.decode(_decodeChunked(bodyBytes))
         : utf8.decode(bodyBytes);
     return _HttpResult(statusCode, responseBody);
@@ -336,7 +339,10 @@ final class ToxiproxyClient {
       if (lineEnd < 0) {
         throw const FormatException('Malformed chunked HTTP response.');
       }
-      final sizeText = ascii.decode(bytes.sublist(offset, lineEnd)).split(';').first;
+      final sizeText = ascii
+          .decode(bytes.sublist(offset, lineEnd))
+          .split(';')
+          .first;
       final size = int.parse(sizeText.trim(), radix: 16);
       offset = lineEnd + 2;
       if (size == 0) {

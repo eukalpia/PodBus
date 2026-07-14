@@ -78,6 +78,7 @@ final class DartRabbitMqAdapter implements RabbitMqAdapter {
   final Map<String, Completer<void>> _pendingPublishes = {};
 
   var _publisherConfirmTimeout = const Duration(seconds: 5);
+  var _closeTimeout = const Duration(seconds: 5);
   var _mandatoryPublish = true;
   var _publishSequence = 0;
   var _publishEpoch = 0;
@@ -184,6 +185,7 @@ final class DartRabbitMqAdapter implements RabbitMqAdapter {
       ..clear()
       ..addAll(lanes);
     _publisherConfirmTimeout = config.publisherConfirmTimeout;
+    _closeTimeout = config.connectTimeout;
     _mandatoryPublish = config.mandatoryPublish;
     _publishEpoch += 1;
     _nextPublisherLane = 0;
@@ -200,18 +202,47 @@ final class DartRabbitMqAdapter implements RabbitMqAdapter {
       ),
     );
 
-    await _clientErrors?.cancel();
+    final clientErrors = _clientErrors;
+    final lanes = _publisherLanes.toList();
+    final consumerChannel = _consumerChannel;
+    final client = _client;
     _clientErrors = null;
-    for (final lane in _publisherLanes) {
-      await lane.close();
-    }
     _publisherLanes.clear();
-    await _consumerChannel?.close();
-    await _client?.close();
     _consumerChannel = null;
     _client = null;
     _consumerExchanges.clear();
     _queues.clear();
+
+    Object? failure;
+    StackTrace? failureStackTrace;
+
+    Future<void> guard(String component, Future<void> Function() action) async {
+      try {
+        await action().timeout(
+          _closeTimeout,
+          onTimeout: () => throw MessagingTimeoutException(
+            'RabbitMQ adapter $component close exceeded $_closeTimeout.',
+            timeout: _closeTimeout,
+          ),
+        );
+      } on Object catch (error, stackTrace) {
+        failure ??= error;
+        failureStackTrace ??= stackTrace;
+      }
+    }
+
+    await Future.wait([
+      if (clientErrors != null)
+        guard('error subscription', clientErrors.cancel),
+      if (client != null) guard('client', client.close),
+      if (consumerChannel != null)
+        guard('consumer channel', consumerChannel.close),
+      for (final lane in lanes) guard('publisher lane', lane.close),
+    ]);
+
+    if (failure != null) {
+      Error.throwWithStackTrace(failure!, failureStackTrace!);
+    }
   }
 
   @override

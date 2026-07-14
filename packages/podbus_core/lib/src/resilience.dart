@@ -215,6 +215,7 @@ final class ResilientMessageBus implements MessageBus {
     _generation += 1;
     _stopHealthMonitor();
 
+    final recovery = _recovery;
     final registrations = _registrations.toList();
     _registrations.clear();
     final delegate = _delegate;
@@ -240,10 +241,6 @@ final class ResilientMessageBus implements MessageBus {
     }
 
     try {
-      // Registration shutdown and transport shutdown intentionally run together.
-      // A worker can be blocked in a broker fetch while the transport close is
-      // the operation that releases that fetch. Serial shutdown deadlocks that
-      // dependency and can skip adapter cleanup after a timeout.
       await Future.wait([
         if (delegate != null)
           guard('delegate', () => delegate.close(timeout: effectiveTimeout)),
@@ -252,7 +249,24 @@ final class ResilientMessageBus implements MessageBus {
             'subscription registration',
             () => registration.close(remove: false),
           ),
+        if (recovery != null)
+          guard('recovery task', () async {
+            try {
+              await recovery;
+            } on Object {
+              // Shutdown invalidates an in-flight recovery attempt.
+            }
+          }),
       ]);
+
+      final lateDelegate = _delegate;
+      _delegate = null;
+      if (lateDelegate != null && !identical(lateDelegate, delegate)) {
+        await guard(
+          'late delegate',
+          () => lateDelegate.close(timeout: effectiveTimeout),
+        );
+      }
     } finally {
       _closing = false;
     }
@@ -444,6 +458,9 @@ final class ResilientMessageBus implements MessageBus {
               } on Object {
                 // Preserve the recovery failure.
               }
+            }
+            if (_closing || generation != _generation) {
+              Error.throwWithStackTrace(error, stackTrace);
             }
             lastError = error;
             lastStackTrace = stackTrace;
@@ -667,6 +684,7 @@ final class ResilientDurableJobQueue implements DurableJobQueue {
     _generation += 1;
     _stopHealthMonitor();
 
+    final recovery = _recovery;
     final registrations = _registrations.toList();
     _registrations.clear();
     final delegate = _delegate;
@@ -693,14 +711,29 @@ final class ResilientDurableJobQueue implements DurableJobQueue {
     }
 
     try {
-      // Close proxy workers and their owning transport concurrently. Broker
-      // fetches can only unblock after the adapter closes its socket/channel.
       await Future.wait([
         if (delegate != null)
           guard('delegate', () => delegate.close(timeout: effectiveTimeout)),
         for (final registration in registrations)
           guard('worker registration', () => registration.close(remove: false)),
+        if (recovery != null)
+          guard('recovery task', () async {
+            try {
+              await recovery;
+            } on Object {
+              // Shutdown invalidates an in-flight recovery attempt.
+            }
+          }),
       ]);
+
+      final lateDelegate = _delegate;
+      _delegate = null;
+      if (lateDelegate != null && !identical(lateDelegate, delegate)) {
+        await guard(
+          'late delegate',
+          () => lateDelegate.close(timeout: effectiveTimeout),
+        );
+      }
     } finally {
       _closing = false;
     }
@@ -893,6 +926,9 @@ final class ResilientDurableJobQueue implements DurableJobQueue {
               } on Object {
                 // Preserve the recovery failure.
               }
+            }
+            if (_closing || generation != _generation) {
+              Error.throwWithStackTrace(error, stackTrace);
             }
             lastError = error;
             lastStackTrace = stackTrace;
