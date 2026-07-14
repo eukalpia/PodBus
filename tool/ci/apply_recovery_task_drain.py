@@ -212,9 +212,6 @@ close_new = '''  @override
       }
     }
 
-    // A protocol-level channel failure can make channel.close() wait forever.
-    // Close the owning client at the same time so the socket releases every
-    // publisher/consumer channel while best-effort cleanup continues.
     await Future.wait([
       if (clientErrors != null)
         guard('error subscription', clientErrors.cancel),
@@ -233,3 +230,26 @@ if close_old not in source:
     raise SystemExit('RabbitMQ adapter close block not found')
 source = source.replace(close_old, close_new, 1)
 adapter.write_text(source)
+
+suite = Path('tool/fault_suite.dart')
+source = suite.read_text()
+finally_old = '''  } finally {
+    await queue.close(timeout: const Duration(seconds: 5)).catchError((_) {});
+  }
+}
+
+Future<Map<String, Object?>> _natsCrashBeforeAck'''
+finally_new = '''  } finally {
+    await queue.close(timeout: const Duration(seconds: 5)).catchError((_) {});
+    await Future.wait([
+      for (final adapter in adapters)
+        adapter.close().timeout(const Duration(seconds: 5)).catchError((_) {}),
+    ]);
+  }
+}
+
+Future<Map<String, Object?>> _natsCrashBeforeAck'''
+if finally_old not in source:
+    raise SystemExit('RabbitMQ channel-failure cleanup block not found')
+source = source.replace(finally_old, finally_new, 1)
+suite.write_text(source)
