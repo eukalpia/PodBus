@@ -35,76 +35,8 @@ jobs:
           dart pub get
           dart analyze .
           dart test packages/podbus_core/test/resilience_test.dart
-      - name: Capture NATS AOT handles after successful report
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update >/dev/null
-          sudo apt-get install -y strace lsof >/dev/null
-          mkdir -p build test-results/aot-handles
-          dart compile exe tool/fault_suite.dart -o build/podbus-fault-suite
-          bash tool/ci/start_integration_services.sh nats rabbitmq toxiproxy
-          bash tool/ci/wait_for_nats.sh
-          bash tool/ci/wait_for_rabbitmq.sh
-          bash tool/ci/wait_for_toxiproxy.sh
-          report=test-results/aot-handles/nats.json
-          build/podbus-fault-suite \
-            --profile=smoke \
-            --scenario=nats-tcp-partition \
-            --report="$report" \
-            > test-results/aot-handles/stdout.log 2>&1 &
-          pid=$!
-          echo "$pid" > test-results/aot-handles/pid.txt
-          for _ in $(seq 1 120); do
-            if [[ -s "$report" ]]; then
-              break
-            fi
-            if ! kill -0 "$pid" 2>/dev/null; then
-              wait "$pid"
-              exit $?
-            fi
-            sleep 1
-          done
-          test -s "$report"
-          python3 - "$report" <<'PY'
-          import json
-          import pathlib
-          import sys
-          data = json.loads(pathlib.Path(sys.argv[1]).read_text())
-          assert data['success'] is True, data
-          PY
-          sleep 3
-          if kill -0 "$pid" 2>/dev/null; then
-            {
-              echo '=== status ==='
-              cat "/proc/$pid/status"
-              echo '=== fd ==='
-              ls -la "/proc/$pid/fd"
-              echo '=== fd targets ==='
-              for fd in /proc/$pid/fd/*; do
-                printf '%s -> ' "$fd"
-                readlink "$fd" || true
-              done
-              echo '=== lsof ==='
-              sudo lsof -nP -p "$pid" || true
-              echo '=== sockets ==='
-              sudo ss -anpt || true
-              echo '=== task stacks ==='
-              for task in /proc/$pid/task/*; do
-                echo "--- $task ---"
-                sudo cat "$task/stack" || true
-              done
-            } > test-results/aot-handles/handles.txt 2>&1
-            sudo timeout 8s strace -ff -tt -T -p "$pid" \
-              -o test-results/aot-handles/strace || true
-            kill -TERM "$pid" || true
-            sleep 2
-            kill -KILL "$pid" 2>/dev/null || true
-            wait "$pid" || true
-            echo 'AOT process remained alive after a successful report.' >&2
-            exit 1
-          fi
-          wait "$pid"
+      - name: Capture detailed AOT handles
+        run: bash tool/ci/capture_aot_fault_handles.sh
       - name: Upload AOT handle diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
