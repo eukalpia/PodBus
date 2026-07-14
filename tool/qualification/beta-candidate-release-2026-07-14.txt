@@ -1,0 +1,19 @@
+PodBus 0.1.0-beta.1 final qualification
+
+Date: 2026-07-14
+
+This marker starts the authoritative qualification after:
+- runtime recovery and broker-client lifecycle fixes;
+- RabbitMQ publisher-confirm lanes;
+- concurrent JetStream PubAck routing;
+- isolate-based NATS and JetStream stress harnesses;
+- AOT fault and soak launchers with structured JSON validation;
+- published README, website, changelog, and beta qualification evidence.
+
+Required on this exact commit:
+- CI, compatibility, security, website, and plain-Dart deployment;
+- 3.25 million mandatory NATS Core, JetStream, and RabbitMQ messages;
+- twelve isolated fault scenarios with successful reports and clean AOT process exit;
+- one uninterrupted one-hour soak with zero missing acknowledged messages and no asynchronous errors.
+
+Kafka large-stress profiles remain experimental and non-gating. Kafka integration tests remain mandatory.
