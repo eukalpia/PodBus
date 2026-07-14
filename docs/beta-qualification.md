@@ -1,124 +1,90 @@
-# Beta candidate qualification
+# PodBus 0.1.0-beta.1 qualification
 
-This document records the qualification evidence for PodBus commit
-`784b3d533f4ea962324394c31ea4712c1a5e8c47`.
+PodBus `0.1.0-beta.1` is an evidence-backed beta for NATS Core, JetStream, and RabbitMQ. Kafka integration remains experimental.
 
-PodBus is a **beta candidate**, not a claim of universal production readiness.
-The evidence below proves the listed code paths on the listed environment. It
-does not replace application-specific load testing, capacity planning, broker
-operations, security review, or failure testing against real downstream
-systems.
+This document records what was tested, how it was tested, and what the results do **not** prove. It does not replace application-specific capacity planning, broker operations, security review, data-governance review, or failure testing against real downstream systems.
 
 ## Scope
 
 The qualification covers:
 
 - Dart 3.12.0 and the current stable Dart SDK;
-- unit tests and the repository coverage floor;
+- formatting, analyzer, unit tests, and the repository coverage floor;
+- security and package metadata checks;
 - NATS Core, NATS JetStream, RabbitMQ, Kafka, and PostgreSQL integration tests;
-- plain-Dart deployment without Serverpod;
-- static analysis, formatting, package metadata, and security workflows;
-- 3.25 million mandatory transport messages;
+- a plain-Dart process deployment outside Serverpod;
+- 3.25 million mandatory NATS Core, JetStream, and RabbitMQ messages;
 - twelve broker and network fault scenarios;
-- a one-hour NATS and RabbitMQ resilience soak.
+- a one-hour NATS and RabbitMQ resilience soak;
+- static website type-check, export, and route validation;
+- retained JSON reports, machine metadata, broker logs, and resource snapshots.
 
-Kafka integration tests are mandatory, but Kafka large-stress profiles remain
-experimental and non-gating. The current Kafka adapter is not included in the
-beta maturity claim.
+Kafka integration tests are mandatory, but Kafka large-stress profiles remain experimental and non-gating. The Kafka adapter is not included in the beta maturity claim.
 
 ## Test environment
 
-The authoritative transport run used GitHub-hosted Ubuntu runners with four
-logical CPUs and Dart 3.12.0. Each matrix entry started a clean broker container
-and captured:
+The transport baseline used GitHub-hosted Ubuntu runners with:
 
-- runner CPU, memory, kernel, and Dart metadata;
-- the full stress result;
-- broker logs;
-- post-run container resource state;
-- RabbitMQ connection, channel, queue, and exchange state where applicable.
+- four logical CPUs;
+- Dart 3.12.0;
+- clean broker containers per matrix entry;
+- 256-byte payloads;
+- explicit publisher and consumer concurrency;
+- retained runner, kernel, broker, and resource metadata.
 
-Every result is tied to the same commit SHA. Throughput values are regression
-signals for this environment, not promises for arbitrary hardware or broker
-configurations.
+Throughput values are regression signals for this environment. They are not promises for arbitrary hardware, replication, disks, network topology, payload size, or acknowledgement policy.
 
 ## Mandatory transport evidence
-
-All payloads were 256 bytes.
 
 | Transport | Mode | Messages | Result | Elapsed | Throughput |
 | --- | --- | ---: | ---: | ---: | ---: |
 | NATS Core | queue group, isolated publisher and consumers | 1,000,000 | 1,000,000 unique, 0 duplicates | 23.528 s | 42,501.6 msg/s |
 | JetStream | durable, memory storage, PubAck and manual ack | 250,000 | 250,000 unique, 0 duplicates | 85.356 s | 2,928.9 msg/s |
 | JetStream | worker, file storage, PubAck and manual ack | 250,000 | 250,000 unique, 0 duplicates | 105.432 s | 2,371.2 msg/s |
-| RabbitMQ | non-persistent fast path, confirms and manual ack | 1,000,000 | 1,000,000 received | 198.379 s | 5,040.8 msg/s |
-| RabbitMQ | persistent queue and messages, confirms | 500,000 | 500,000 received | 293.165 s | 1,705.5 msg/s |
-| RabbitMQ | durable worker path, confirms and manual ack | 250,000 | 250,000 received | 177.982 s | 1,404.6 msg/s |
+| RabbitMQ | non-persistent, confirms and manual ack | 1,000,000 | 1,000,000 received | 198.379 s | 5,040.8 msg/s |
+| RabbitMQ | persistent queue/messages, confirms | 500,000 | 500,000 received | 293.165 s | 1,705.5 msg/s |
+| RabbitMQ | durable workers, confirms and manual ack | 250,000 | 250,000 received | 177.982 s | 1,404.6 msg/s |
 
-These rows are intentionally not ranked as one benchmark. NATS Core provides a
-very different delivery contract from persistent RabbitMQ or JetStream. The
-result that matters is completion with the expected acknowledgement and
-persistence semantics.
+The rows are intentionally not ranked as one benchmark. NATS Core provides a different delivery contract from persistent RabbitMQ or JetStream. Completion under the declared acknowledgement and persistence contract matters more than a synthetic cross-broker leaderboard.
 
 ## Harness architecture
 
 ### NATS Core
 
-The NATS Core profile runs one publisher isolate and sixteen consumer isolates.
-Each consumer owns an independent client connection and joins one queue group.
-A readiness flush completes before publication starts. Consumers report bounded
-progress to the coordinator and return one bitmap each for exact uniqueness
-verification.
+The NATS Core profile uses one publisher isolate and sixteen consumer isolates. Each consumer owns an independent client connection and joins one queue group. A readiness flush completes before publication starts. Consumers report bounded progress and return bitmaps for exact uniqueness verification.
 
-This design prevents a publisher loop from starving every consumer socket on a
-single Dart event loop.
+This prevents one publisher loop from starving all consumer sockets on a single Dart event loop.
 
 ### NATS JetStream
 
-The JetStream profiles run one publisher isolate and independent consumer
-isolates attached to one durable pull consumer. Each consumer owns its own NATS
-connection, fetch loop, bitmap, and manual acknowledgement path. The first
-consumer creates the durable; the remaining consumers attach after readiness to
-avoid a consumer-creation race.
+The JetStream profiles use one publisher isolate and independent consumer isolates attached to one durable pull consumer. Each consumer owns its own NATS connection, fetch loop, bitmap, and manual acknowledgement path.
 
-The publisher uses a PodBus-owned wildcard reply inbox. Each publish receives a
-unique reply subject, allowing JetStream PubAck responses to complete out of
-order. This avoids the global request/reply mutex in `dart_nats 1.1.1` while
-preserving message IDs, timeouts, duplicate metadata, server errors, and close
-semantics.
+Publishing uses a PodBus-owned wildcard reply inbox. Every publish receives a unique reply subject, allowing PubAck responses to complete out of order. The implementation preserves message IDs, duplicate metadata, server errors, timeouts, and connection-replacement semantics.
 
-Before this change, the same 250,000-message durable profile processed only
-43,862 messages before the 30-minute timeout. The final profile completed all
-250,000 messages in 85.356 seconds.
+Before the concurrent PubAck path, the 250,000-message durable profile processed only 43,862 messages before a 30-minute timeout. The final profile completed all 250,000 in 85.356 seconds.
 
 ### RabbitMQ
 
-RabbitMQ publishing uses a configurable pool of publisher-confirm lanes. Each
-lane owns an AMQP channel and permits at most one outstanding confirm on that
-channel. Work is distributed round-robin across lanes.
+RabbitMQ publishing uses a configurable pool of publisher-confirm lanes. Each lane owns an AMQP channel and permits at most one outstanding confirm. Work is distributed round-robin across lanes.
 
-This avoids the unsafe multi-ack mutation path in `dart_amqp 0.3.1` without
-removing parallelism. A failed or nacked operation does not poison subsequent
-work on the lane, and reconnect epochs invalidate operations from an obsolete
-connection.
+This avoids the unsafe multi-ack mutation path in `dart_amqp 0.3.1` without removing parallel confirmation. A failed or nacked publish does not poison subsequent work on its lane, and reconnect epochs invalidate operations created by an obsolete connection.
 
 ## Delivery guarantees demonstrated
 
 The qualification demonstrates the following properties for the tested paths:
 
-- NATS Core delivers the tested queue-group workload without broker persistence.
-- JetStream and RabbitMQ workers acknowledge only after successful handler completion.
+- NATS Core completes the tested queue-group workload without broker persistence.
 - JetStream enqueue waits for PubAck.
-- RabbitMQ publish waits for AMQP publisher confirmation.
+- RabbitMQ publishing waits for AMQP publisher confirmation.
+- JetStream and RabbitMQ workers acknowledge only after successful handler completion.
 - Persistent RabbitMQ profiles use durable queues and persistent messages.
-- Durable worker paths are at-least-once and may redeliver after failures.
-- Duplicate-safe business side effects still require application idempotency or a shared inbox store.
-- Exactly-once behavior across arbitrary external side effects is not claimed.
+- Durable workers are at-least-once and may redeliver after failures.
+- Source deliveries are not finalized before required retry or dead-letter confirmation boundaries.
+- Exactly-once external side effects are not claimed.
 
 ## Fault matrix
 
-The broker fault workflow runs every scenario in an isolated job with clean
-NATS, RabbitMQ, and Toxiproxy services:
+Every scenario runs in an isolated job with clean NATS, RabbitMQ, and Toxiproxy services:
 
 1. NATS TCP partition and recovery;
 2. RabbitMQ TCP partition and recovery;
@@ -133,38 +99,55 @@ NATS, RabbitMQ, and Toxiproxy services:
 11. RabbitMQ shutdown during dead-letter confirmation;
 12. slow consumers and bounded concurrency.
 
-A scenario passes only when its expected delivery, failure, redelivery,
-reconnection, or confirmation behavior is observed. Broker logs and structured
-JSON evidence are retained as workflow artifacts.
+Fault tools are compiled with `dart compile exe` before execution. This keeps Dart frontend/kernel-service resources out of process-lifecycle assertions. A scenario passes only when the AOT process exits successfully and the structured report contains exactly one successful result for the requested scenario.
 
-## Soak gate
+## One-hour soak evidence
 
-The resilience soak runs NATS and RabbitMQ continuously for one hour with
-periodic disruption and recovery. The release gate requires:
+The recorded soak ran for **3,701,859 ms**—61 minutes 41.859 seconds—and injected **28 disruptions**.
 
-- no missing acknowledged messages;
-- no unhandled asynchronous errors;
-- bounded recovery after disruption;
-- successful shutdown and evidence upload;
-- retained broker logs for post-run inspection.
+Disruptions alternated between:
 
-A shorter detector-only workflow is not accepted as soak evidence.
+- NATS TCP partitions;
+- RabbitMQ TCP partitions;
+- RabbitMQ broker restarts.
+
+### Delivery results
+
+| Metric | NATS JetStream | RabbitMQ |
+| --- | ---: | ---: |
+| Acknowledged enqueues | 25,004 | 25,004 |
+| Deliveries | 25,018 | 25,005 |
+| Unique delivered | 25,004 | 25,004 |
+| Missing acknowledged messages | **0** | **0** |
+| Duplicate deliveries | 14 | 1 |
+| Redeliveries | 376 | 0 |
+| Maximum attempt | 3 | 1 |
+| Delegate factory calls | 71 | 113 |
+
+### Recovery and resource results
+
+- operation errors: **0**;
+- recovery latency p50: **967 ms**;
+- recovery latency p95: **13,401 ms**;
+- maximum recovery latency: **13,704 ms**;
+- RSS at start: **255,094,784 bytes**;
+- peak RSS: **309,809,152 bytes**;
+- RSS growth: **54,714,368 bytes**—about 52.2 MiB;
+- configured RSS growth threshold: **536,870,912 bytes**;
+- configured recovery p95 threshold: **30,000 ms**;
+- failure reasons: **none**.
+
+Soak tools are also compiled to AOT executables. The workflow validates `success == true`, `missing == 0` for both transports, and an empty asynchronous error list before the job can pass.
 
 ## Operational defaults
 
 ### RabbitMQ publisher lanes
 
-`publisherChannelCount` defaults to `4` and accepts values from `1` through
-`64`.
+`publisherChannelCount` defaults to `4` and accepts values from `1` through `64`.
 
-Start with four lanes. Increase the value only when publisher-confirm latency is
-measured as the limiting factor and the RabbitMQ node has channel and connection
-headroom. More lanes increase broker channel count, topology recovery work, and
-in-flight operations during failure.
+Start with four lanes. Increase the value only when publisher-confirm latency is measured as the limiting factor and the RabbitMQ node has channel and connection headroom. More lanes increase channel count, topology recovery work, and in-flight operations during failure.
 
-Use one lane when deterministic ordering on one publishing path matters more
-than throughput. Do not emulate higher concurrency by allowing multiple
-outstanding confirms on one lane while PodBus depends on `dart_amqp 0.3.1`.
+Use one lane when deterministic ordering on one publishing path matters more than throughput. Do not emulate higher concurrency by allowing several outstanding confirms on one lane while PodBus depends on `dart_amqp 0.3.1`.
 
 Monitor:
 
@@ -176,9 +159,9 @@ Monitor:
 
 ### JetStream publishing
 
-Keep the application publish concurrency bounded even though PubAcks can now
-complete concurrently. The transport timeout remains the upper bound for each
-confirmation. Monitor:
+Keep application publish concurrency bounded even though PubAcks can complete concurrently. The transport timeout remains the deadline for each confirmation.
+
+Monitor:
 
 - PubAck latency and timeout count;
 - pending publish confirmations;
@@ -206,36 +189,37 @@ dart test \
   --exclude-tags=integration
 ```
 
-Run broker integration locally:
+Compile lifecycle-sensitive tools:
 
 ```bash
-docker compose -f docker-compose.integration.yaml up -d \
-  nats rabbitmq kafka postgres
-
-PODBUS_RUN_INTEGRATION_TESTS=true dart test \
-  packages/podbus_nats/test \
-  packages/podbus_rabbitmq/test \
-  packages/podbus_kafka/test \
-  packages/podbus_postgres/test \
-  --tags=integration
+mkdir -p build
+dart compile exe tool/fault_suite.dart -o build/podbus-fault-suite
+dart compile exe tool/soak_resilience.dart -o build/podbus-soak-resilience
 ```
 
-Run the large transport profiles through the `Large transport stress` GitHub
-workflow so each profile gets a clean broker, isolated runner, metadata, logs,
-and retained evidence. Run fault and soak qualification through their dedicated
-workflows rather than combining them into an unrepeatable local command.
+Run a fault scenario and a full soak:
+
+```bash
+build/podbus-fault-suite \
+  --profile=smoke \
+  --scenario=nats-tcp-partition \
+  --report=test-results/nats-partition.json
+
+build/podbus-soak-resilience \
+  --duration=1h \
+  --report=test-results/soak-summary.json
+```
+
+Use the dedicated GitHub workflows for authoritative stress, fault, and soak evidence so every profile receives a clean broker environment, machine metadata, logs, and retained artifacts.
 
 ## Known limits before 1.0
 
 - Package versions remain pre-1.0 and public APIs may still change.
 - Packages are not yet published to pub.dev.
 - Kafka large-stress and rebalance behavior remain experimental.
-- Broker clustering and multi-region failure modes require environment-specific testing.
+- Broker clustering and multi-region failure modes require environment-specific qualification.
 - Throughput depends on persistence, replication, disk, payload, batching, network, and acknowledgement policy.
 - PodBus cannot make non-transactional external side effects exactly-once.
-- Applications must validate schemas, authorization, tenant isolation, retention, and data policy for their own workloads.
+- Applications must validate schemas, authorization, tenant isolation, retention, and data policy for their workloads.
 
-A stable `1.0.0` release requires a documented compatibility policy, settled
-public APIs, repeatable package publication, and independent production
-experience. It does not require pretending distributed systems stopped having
-failure modes.
+A stable `1.0.0` requires a documented compatibility policy, settled public APIs, repeatable package publication, and independent production experience. It does not require pretending distributed systems stopped having failure modes.
