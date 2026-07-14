@@ -8,10 +8,7 @@ marker = '''    _stopHealthMonitor();
     final registrations = _registrations.toList();'''
 replacement = '''    _stopHealthMonitor();
 
-    final connecting = _connecting;
     final recovery = _recovery;
-    _connecting = null;
-    _recovery = null;
     final registrations = _registrations.toList();'''
 if source.count(marker) != 2:
     raise SystemExit(f'expected 2 close markers, found {source.count(marker)}')
@@ -35,39 +32,35 @@ message_old = '''    try {
       _closing = false;
     }
 '''
-message_new = '''    await Future.wait([
-      if (delegate != null)
-        guard('delegate', () => delegate.close(timeout: effectiveTimeout)),
-      for (final registration in registrations)
-        guard(
-          'subscription registration',
-          () => registration.close(remove: false),
-        ),
-      if (connecting != null)
-        guard('connecting task', () async {
-          try {
-            await connecting;
-          } on Object {
-            // Shutdown invalidates an in-flight connection attempt.
-          }
-        }),
-      if (recovery != null)
-        guard('recovery task', () async {
-          try {
-            await recovery;
-          } on Object {
-            // Shutdown invalidates an in-flight recovery attempt.
-          }
-        }),
-    ]);
+message_new = '''    try {
+      await Future.wait([
+        if (delegate != null)
+          guard('delegate', () => delegate.close(timeout: effectiveTimeout)),
+        for (final registration in registrations)
+          guard(
+            'subscription registration',
+            () => registration.close(remove: false),
+          ),
+        if (recovery != null)
+          guard('recovery task', () async {
+            try {
+              await recovery;
+            } on Object {
+              // Shutdown invalidates an in-flight recovery attempt.
+            }
+          }),
+      ]);
 
-    final lateDelegate = _delegate;
-    _delegate = null;
-    if (lateDelegate != null && !identical(lateDelegate, delegate)) {
-      await guard(
-        'late delegate',
-        () => lateDelegate.close(timeout: effectiveTimeout),
-      );
+      final lateDelegate = _delegate;
+      _delegate = null;
+      if (lateDelegate != null && !identical(lateDelegate, delegate)) {
+        await guard(
+          'late delegate',
+          () => lateDelegate.close(timeout: effectiveTimeout),
+        );
+      }
+    } finally {
+      _closing = false;
     }
 '''
 if message_old not in source:
@@ -87,36 +80,32 @@ durable_old = '''    try {
       _closing = false;
     }
 '''
-durable_new = '''    await Future.wait([
-      if (delegate != null)
-        guard('delegate', () => delegate.close(timeout: effectiveTimeout)),
-      for (final registration in registrations)
-        guard('worker registration', () => registration.close(remove: false)),
-      if (connecting != null)
-        guard('connecting task', () async {
-          try {
-            await connecting;
-          } on Object {
-            // Shutdown invalidates an in-flight connection attempt.
-          }
-        }),
-      if (recovery != null)
-        guard('recovery task', () async {
-          try {
-            await recovery;
-          } on Object {
-            // Shutdown invalidates an in-flight recovery attempt.
-          }
-        }),
-    ]);
+durable_new = '''    try {
+      await Future.wait([
+        if (delegate != null)
+          guard('delegate', () => delegate.close(timeout: effectiveTimeout)),
+        for (final registration in registrations)
+          guard('worker registration', () => registration.close(remove: false)),
+        if (recovery != null)
+          guard('recovery task', () async {
+            try {
+              await recovery;
+            } on Object {
+              // Shutdown invalidates an in-flight recovery attempt.
+            }
+          }),
+      ]);
 
-    final lateDelegate = _delegate;
-    _delegate = null;
-    if (lateDelegate != null && !identical(lateDelegate, delegate)) {
-      await guard(
-        'late delegate',
-        () => lateDelegate.close(timeout: effectiveTimeout),
-      );
+      final lateDelegate = _delegate;
+      _delegate = null;
+      if (lateDelegate != null && !identical(lateDelegate, delegate)) {
+        await guard(
+          'late delegate',
+          () => lateDelegate.close(timeout: effectiveTimeout),
+        );
+      }
+    } finally {
+      _closing = false;
     }
 '''
 if durable_old not in source:
