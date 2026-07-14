@@ -1,0 +1,1 @@
+Run the robust source-only transport shutdown patch and require clean broker fault process exit.
