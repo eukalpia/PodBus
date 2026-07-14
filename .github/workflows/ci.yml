@@ -40,10 +40,12 @@ jobs:
           python3 tool/ci/apply_recovery_task_drain.py
           dart format \
             packages/podbus_core/lib/src/resilience.dart \
+            packages/podbus_rabbitmq/lib/src/rabbitmq_adapter.dart \
             tool/src/fault_harness.dart
           dart pub get
           dart analyze .
           dart test packages/podbus_core/test/resilience_test.dart
+          dart test packages/podbus_rabbitmq/test/rabbitmq_adapter_test.dart
       - name: Compile fault suite
         run: |
           mkdir -p build test-results
