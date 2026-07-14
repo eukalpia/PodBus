@@ -3,16 +3,21 @@
 </p>
 
 <p align="center">
-  Transport-aware messaging and durable jobs for Dart and Serverpod.
+  <strong>Transport-aware messaging and durable jobs for Dart and Serverpod.</strong><br />
+  Shared application contracts without pretending distinct brokers have identical guarantees.
 </p>
 
 <p align="center">
   <a href="https://github.com/eukalpia/PodBus/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/eukalpia/PodBus/actions/workflows/ci.yml/badge.svg" /></a>
+  <a href="https://github.com/eukalpia/PodBus/actions/workflows/fault-injection.yml"><img alt="Fault injection" src="https://github.com/eukalpia/PodBus/actions/workflows/fault-injection.yml/badge.svg" /></a>
+  <a href="https://github.com/eukalpia/PodBus/actions/workflows/stress.yml"><img alt="Stress" src="https://github.com/eukalpia/PodBus/actions/workflows/stress.yml/badge.svg" /></a>
+  <a href="https://github.com/eukalpia/PodBus/actions/workflows/soak.yml"><img alt="Soak" src="https://github.com/eukalpia/PodBus/actions/workflows/soak.yml/badge.svg" /></a>
   <a href="https://github.com/eukalpia/PodBus/actions/workflows/compatibility.yml"><img alt="Compatibility" src="https://github.com/eukalpia/PodBus/actions/workflows/compatibility.yml/badge.svg" /></a>
   <a href="https://github.com/eukalpia/PodBus/actions/workflows/security.yml"><img alt="Security" src="https://github.com/eukalpia/PodBus/actions/workflows/security.yml/badge.svg" /></a>
   <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" /></a>
   <img alt="Dart SDK" src="https://img.shields.io/badge/Dart-%5E3.12.0-0175C2?logo=dart" />
   <img alt="Version" src="https://img.shields.io/badge/version-0.1.0--beta.1-blueviolet" />
+  <img alt="Status" src="https://img.shields.io/badge/status-beta-22c55e" />
 </p>
 
 PodBus gives Dart services one explicit API for:
@@ -22,39 +27,71 @@ PodBus gives Dart services one explicit API for:
 - typed payloads and schema versions;
 - PostgreSQL outbox, inbox, and idempotency;
 - tracing, bounded metrics, structured logs, and health checks;
-- Serverpod lifecycle integration.
+- framework-neutral recovery and graceful shutdown;
+- optional Serverpod lifecycle integration.
 
-It does **not** pretend NATS Core, JetStream, RabbitMQ, and Kafka have identical semantics. Applications can inspect capabilities at startup and fail before serving traffic when a required guarantee is unavailable.
+PodBus is **not a broker**. It runs on top of NATS Core, JetStream, RabbitMQ, Kafka, and PostgreSQL reliability primitives. Applications can inspect capabilities at startup and fail before serving traffic when a selected adapter cannot provide a required behavior.
 
 > [!IMPORTANT]
-> PodBus `0.1.0-beta.1` is an evidence-backed beta. Public APIs may still change before `1.0.0`. NATS Core, JetStream, and RabbitMQ are included in the beta qualification. Kafka integration remains experimental.
+> PodBus `0.1.0-beta.1` is an evidence-backed beta. NATS Core, JetStream, and RabbitMQ are included in the beta qualification. Kafka integration tests are mandatory, but Kafka remains experimental. Public APIs can still change before `1.0.0`.
 
-## Qualification snapshot
+> [!WARNING]
+> Durable processing is at-least-once. PodBus does not claim exactly-once external side effects. Reconnects, consumer restarts, acknowledgement expiry, and ambiguous publish confirmation can produce duplicate delivery. Use an inbox, idempotency key, provider token, or domain uniqueness constraint around externally visible effects.
 
-The beta gate covers one pinned revision with:
+## Beta qualification snapshot
 
-- format, analyzer, unit, coverage, security, and package checks;
-- Dart `3.12.0` and the current stable SDK;
+The beta gate covers one pinned runtime revision with:
+
+- format, analyzer, complete unit suite, coverage, package, and security checks;
+- Dart `3.12.0` and the current stable Dart SDK;
 - Docker-backed NATS, RabbitMQ, Kafka, and PostgreSQL integration tests;
-- plain-Dart deployment without Serverpod;
-- **3.25 million mandatory transport messages**;
-- **12 broker and network fault scenarios**;
-- a real **one-hour resilience soak**.
+- plain-Dart deployment outside Serverpod;
+- **3.25 million mandatory NATS Core, JetStream, and RabbitMQ messages**;
+- **12 isolated broker and network fault scenarios**;
+- a real **one-hour NATS and RabbitMQ resilience soak**;
+- retained JSON reports, machine metadata, broker logs, and resource snapshots.
 
-All stress rows below used 256-byte payloads on GitHub-hosted Ubuntu runners with four logical CPUs. They are regression evidence for that environment, not universal throughput promises.
+Fault and soak harnesses are compiled to AOT executables before qualification. This keeps Dart frontend/kernel-service resources out of process-lifecycle assertions and makes a successful report plus clean process exit the actual gate.
 
-| Transport | Mode | Messages | Result | Throughput |
-| --- | --- | ---: | ---: | ---: |
-| NATS Core | queue group; isolated publisher and consumers | 1,000,000 | 1,000,000 unique; 0 duplicates | 42,501.6 msg/s |
-| JetStream | memory storage; PubAck + manual ack | 250,000 | 250,000 unique; 0 duplicates | 2,928.9 msg/s |
-| JetStream | file storage worker; PubAck + manual ack | 250,000 | 250,000 unique; 0 duplicates | 2,371.2 msg/s |
-| RabbitMQ | non-persistent; publisher confirms | 1,000,000 | 1,000,000 received | 5,040.8 msg/s |
-| RabbitMQ | persistent queue/messages; confirms | 500,000 | 500,000 received | 1,705.5 msg/s |
-| RabbitMQ | durable workers; confirms + manual ack | 250,000 | 250,000 received | 1,404.6 msg/s |
+### Measured transport baseline
 
-Do not rank these rows as one synthetic race. NATS Core, persistent RabbitMQ, and JetStream provide different persistence and acknowledgement contracts.
+All rows below used 256-byte payloads on GitHub-hosted Ubuntu runners with four logical CPUs and Dart 3.12.0. They are regression evidence for this environment, not universal throughput promises.
 
-Read [Beta qualification](docs/beta-qualification.md) for the exact methodology, failure matrix, operational defaults, and known limits.
+| Transport | Mode and acknowledgement contract | Messages | Result | Elapsed | Throughput |
+| --- | --- | ---: | ---: | ---: | ---: |
+| NATS Core | queue group; isolated publisher and consumers | 1,000,000 | 1,000,000 unique; 0 duplicates | 23.528 s | **42,501.6 msg/s** |
+| JetStream | memory storage; PubAck + manual ack | 250,000 | 250,000 unique; 0 duplicates | 85.356 s | **2,928.9 msg/s** |
+| JetStream | file storage worker; PubAck + manual ack | 250,000 | 250,000 unique; 0 duplicates | 105.432 s | **2,371.2 msg/s** |
+| RabbitMQ | non-persistent; publisher confirms + manual ack | 1,000,000 | 1,000,000 received | 198.379 s | **5,040.8 msg/s** |
+| RabbitMQ | persistent queue/messages; publisher confirms | 500,000 | 500,000 received | 293.165 s | **1,705.5 msg/s** |
+| RabbitMQ | durable workers; confirms + manual ack | 250,000 | 250,000 received | 177.982 s | **1,404.6 msg/s** |
+
+Do not rank these rows as one synthetic race. NATS Core, persistent RabbitMQ, and JetStream provide different persistence, confirmation, acknowledgement, and redelivery contracts.
+
+### One-hour disruption soak
+
+The recorded qualification soak ran for **61 minutes 41.859 seconds** and injected **28 faults**: alternating NATS/RabbitMQ TCP partitions and RabbitMQ broker restarts.
+
+| Metric | NATS JetStream | RabbitMQ |
+| --- | ---: | ---: |
+| Acknowledged enqueues | 25,004 | 25,004 |
+| Unique delivered | 25,004 | 25,004 |
+| Missing acknowledged messages | **0** | **0** |
+| Duplicate deliveries | 14 | 1 |
+| Redeliveries | 376 | 0 |
+| Delegate factory calls | 71 | 113 |
+
+Additional soak evidence:
+
+- operation errors: **0**;
+- recovery latency p50: **967 ms**;
+- recovery latency p95: **13.401 s**;
+- maximum observed recovery latency: **13.704 s**;
+- RSS growth: **54,714,368 bytes** (about **52.2 MiB**);
+- configured RSS growth limit: **512 MiB**;
+- failure reasons: **none**.
+
+Read [Beta qualification](docs/beta-qualification.md) for the exact harness architecture, failure matrix, operational defaults, and known limits.
 
 ## Packages
 
@@ -68,7 +105,7 @@ Read [Beta qualification](docs/beta-qualification.md) for the exact methodology,
 | `podbus_observability` | Tracing, Prometheus metrics, JSON logs, health probes |
 | `podbus_serverpod` | Serverpod lifecycle and per-message session integration |
 
-The packages are not published to pub.dev yet. Pin a Git commit when reproducible builds matter.
+Packages are not published to pub.dev yet. Pin the beta tag or a reviewed commit for reproducible builds.
 
 ```yaml
 dependencies:
@@ -134,7 +171,7 @@ Future<void> main() async {
 
 ## Durable workers
 
-JetStream and RabbitMQ implement `DurableJobQueue`. The source message is acknowledged only after the handler succeeds, or after retry/dead-letter handling reaches its required confirmation boundary.
+JetStream and RabbitMQ implement `DurableJobQueue`. The source delivery is acknowledged only after the handler succeeds, or after retry/dead-letter handling reaches its required confirmation boundary.
 
 ```dart
 final jobs = NatsJetStreamJobQueue(
@@ -200,7 +237,7 @@ A publish-confirm timeout is ambiguous: the broker may have accepted the message
 | Durable workers | — | ✓ | ✓ | ✓ |
 | Manual acknowledgement / commit | — | ✓ | ✓ | ✓ |
 | Retry and dead letter | — | ✓ | ✓ | experimental |
-| Maturity | reference | beta | beta | experimental |
+| Maturity | beta | beta | beta | experimental |
 
 Require capabilities during startup:
 
@@ -234,6 +271,8 @@ await pool.runTx((transaction) async {
 - RabbitMQ uses a configurable publisher-confirm lane pool with one outstanding confirmation per AMQP channel.
 - JetStream uses a concurrent wildcard PubAck inbox with cryptographically random NATS NUID reply subjects.
 - JetStream drain is bounded by each original publish deadline.
+- Recovery coalesces concurrent reconnect attempts and restores subscriptions/workers.
+- Health probes cannot install a replacement delegate after shutdown invalidates their generation.
 - NATS and JetStream stress clients run publisher and consumers in independent isolates.
 - Payload, header, error-detail, concurrency, and metric-cardinality limits are explicit.
 - Graceful shutdown stops new work, drains active handlers/publishes, and closes broker resources.
@@ -298,6 +337,16 @@ PODBUS_RUN_INTEGRATION_TESTS=true dart test \
   packages/podbus_kafka/test \
   packages/podbus_postgres/test \
   --tags=integration
+```
+
+Run fault and soak tools as AOT executables when process lifecycle is part of the assertion:
+
+```bash
+dart compile exe tool/fault_suite.dart -o build/podbus-fault-suite
+dart compile exe tool/soak_resilience.dart -o build/podbus-soak-resilience
+
+build/podbus-fault-suite --profile=smoke --scenario=nats-tcp-partition
+build/podbus-soak-resilience --duration=1h
 ```
 
 The stress tools are for regression detection and documented capacity work, not for inventing one magical messages-per-second number.
