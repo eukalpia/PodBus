@@ -84,6 +84,10 @@ jobs:
           sdk: 3.12.0
       - name: Resolve dependencies
         run: dart pub get
+      - name: Compile fault suite
+        run: |
+          mkdir -p build test-results
+          dart compile exe tool/fault_suite.dart -o build/podbus-fault-suite
       - name: Start clean production-gate brokers
         run: bash tool/ci/start_integration_services.sh nats rabbitmq toxiproxy
       - name: Wait for production-gate brokers
@@ -92,12 +96,33 @@ jobs:
           bash tool/ci/wait_for_rabbitmq.sh
           bash tool/ci/wait_for_toxiproxy.sh
       - name: Run isolated full fault scenario
-        run: >-
-          timeout --signal=TERM --kill-after=15s 10m
-          dart run tool/fault_suite.dart
-          --profile=full
-          --scenario=${{ matrix.scenario }}
-          --report=test-results/release-${{ matrix.scenario }}.json
+        shell: bash
+        env:
+          SCENARIO: ${{ matrix.scenario }}
+        run: |
+          set -euo pipefail
+          report="test-results/release-${SCENARIO}.json"
+          timeout --signal=TERM --kill-after=15s 10m \
+            build/podbus-fault-suite \
+              --profile=full \
+              --scenario="${SCENARIO}" \
+              --report="${report}"
+          python3 - "$report" "$SCENARIO" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          scenario = sys.argv[2]
+          if not path.is_file():
+              raise SystemExit(f'missing release fault report: {path}')
+          data = json.loads(path.read_text())
+          if data.get('success') is not True:
+              raise SystemExit(f'release fault scenario failed: {scenario}: {data}')
+          results = data.get('results', [])
+          if len(results) != 1 or results[0].get('name') != scenario or results[0].get('success') is not True:
+              raise SystemExit(f'unexpected release fault report for {scenario}: {data}')
+          PY
       - name: Capture production-gate diagnostics
         if: always()
         shell: bash
