@@ -41,7 +41,8 @@ jobs:
           dart format \
             packages/podbus_core/lib/src/resilience.dart \
             packages/podbus_rabbitmq/lib/src/rabbitmq_adapter.dart \
-            tool/src/fault_harness.dart
+            tool/src/fault_harness.dart \
+            tool/fault_suite.dart
           dart pub get
           dart analyze .
           dart test packages/podbus_core/test/resilience_test.dart
