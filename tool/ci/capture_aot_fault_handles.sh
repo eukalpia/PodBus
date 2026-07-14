@@ -12,20 +12,24 @@ bash tool/ci/wait_for_rabbitmq.sh
 bash tool/ci/wait_for_toxiproxy.sh
 
 report=test-results/aot-handles/nats.json
-build/podbus-fault-suite \
-  --profile=smoke \
-  --scenario=nats-tcp-partition \
-  --report="$report" \
+trace_prefix=test-results/aot-handles/lifecycle
+strace -ff -tt -T \
+  -e trace=socket,socketpair,connect,accept,accept4,bind,listen,shutdown,close,epoll_ctl,timerfd_create,timerfd_settime \
+  -o "$trace_prefix" \
+  -- build/podbus-fault-suite \
+    --profile=smoke \
+    --scenario=nats-tcp-partition \
+    --report="$report" \
   > test-results/aot-handles/stdout.log 2>&1 &
-pid=$!
-echo "$pid" > test-results/aot-handles/pid.txt
+tracer_pid=$!
+echo "$tracer_pid" > test-results/aot-handles/tracer-pid.txt
 
 for _ in $(seq 1 120); do
   if [[ -s "$report" ]]; then
     break
   fi
-  if ! kill -0 "$pid" 2>/dev/null; then
-    wait "$pid"
+  if ! kill -0 "$tracer_pid" 2>/dev/null; then
+    wait "$tracer_pid"
     exit $?
   fi
   sleep 1
@@ -41,9 +45,16 @@ data = json.loads(pathlib.Path(sys.argv[1]).read_text())
 assert data['success'] is True, data
 PY
 
+pid="$(pgrep -P "$tracer_pid" -f 'podbus-fault-suite' | head -n 1 || true)"
+if [[ -z "$pid" ]]; then
+  pid="$(pgrep -n -f "$PWD/build/podbus-fault-suite" || true)"
+fi
+test -n "$pid"
+echo "$pid" > test-results/aot-handles/pid.txt
+
 sleep 3
 if ! kill -0 "$pid" 2>/dev/null; then
-  wait "$pid"
+  wait "$tracer_pid"
   exit $?
 fi
 
@@ -117,10 +128,10 @@ states = {
     '0A': 'LISTEN', '0B': 'CLOSING',
 }
 for name, decoder in [('tcp', decode_ipv4), ('tcp6', decode_ipv6)]:
-    path = pathlib.Path(f'/proc/{pid}/net/{name}')
-    if not path.exists():
+    table = pathlib.Path(f'/proc/{pid}/net/{name}')
+    if not table.exists():
         continue
-    for line in path.read_text().splitlines()[1:]:
+    for line in table.read_text().splitlines()[1:]:
         fields = line.split()
         inode = fields[9]
         if inode not in inodes:
@@ -135,12 +146,11 @@ for name, decoder in [('tcp', decode_ipv4), ('tcp6', decode_ipv6)]:
         )
 PY
 
-sudo timeout 8s strace -ff -tt -T -p "$pid" \
-  -o test-results/aot-handles/strace || true
 kill -TERM "$pid" || true
 sleep 2
 kill -KILL "$pid" 2>/dev/null || true
-wait "$pid" || true
+kill -TERM "$tracer_pid" 2>/dev/null || true
+wait "$tracer_pid" || true
 
 echo 'AOT process remained alive after a successful report.' >&2
 exit 1
