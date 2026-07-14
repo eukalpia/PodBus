@@ -87,6 +87,10 @@ jobs:
           PY
       - name: Resolve dependencies
         run: dart pub get
+      - name: Compile soak harness
+        run: |
+          mkdir -p build test-results
+          dart compile exe tool/soak_resilience.dart -o build/podbus-soak-resilience
       - name: Start clean brokers and Toxiproxy
         run: bash tool/ci/start_integration_services.sh nats rabbitmq toxiproxy
       - name: Wait for services
@@ -108,10 +112,35 @@ jobs:
           )"
           watchdog_seconds=$((duration_seconds + 600))
           timeout --signal=TERM --kill-after=30s "${watchdog_seconds}s" \
-            dart run tool/soak_resilience.dart \
+            build/podbus-soak-resilience \
               --duration="${SOAK_DURATION}" \
               --allow-short="${ALLOW_SHORT}" \
               --report=test-results/soak-summary.json
+          python3 - test-results/soak-summary.json <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          if not path.is_file():
+              raise SystemExit(f'missing soak report: {path}')
+          data = json.loads(path.read_text())
+          if data.get('success') is not True:
+              raise SystemExit(f'soak failed: {data.get("failureReasons")}')
+          for transport in ('nats', 'rabbitmq'):
+              result = data.get(transport, {})
+              if result.get('missing') != 0:
+                  raise SystemExit(f'{transport} missing acknowledged messages: {result}')
+          if data.get('errors'):
+              raise SystemExit(f'unexpected soak errors: {data["errors"]}')
+          print(
+              'validated soak:',
+              f'duration={data.get("actualDurationMs")} ms',
+              f'faults={data.get("faultCount")}',
+              f'p95={data.get("recoveryLatencyP95Ms")} ms',
+              f'rss_growth={data.get("rssGrowthBytes")} bytes',
+          )
+          PY
       - name: Publish soak summary
         if: always()
         shell: bash
