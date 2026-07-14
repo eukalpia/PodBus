@@ -451,6 +451,10 @@ Future<Map<String, Object?>> _rabbitChannelFailures(
     return {'factoryCalls': factories, 'deliveries': received};
   } finally {
     await queue.close(timeout: const Duration(seconds: 5)).catchError((_) {});
+    await Future.wait([
+      for (final adapter in adapters)
+        adapter.close().timeout(const Duration(seconds: 5)).catchError((_) {}),
+    ]);
   }
 }
 
