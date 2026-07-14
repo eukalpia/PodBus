@@ -1,0 +1,1 @@
+Run the source-only transport shutdown patch and require clean process exit for NATS and RabbitMQ fault scenarios.
