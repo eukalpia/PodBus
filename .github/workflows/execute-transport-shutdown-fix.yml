@@ -1,0 +1,275 @@
+name: Execute transport shutdown fix
+
+on:
+  pull_request:
+    paths:
+      - "tool/qualification/trigger-transport-shutdown-fix.txt"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: execute-transport-shutdown-fix
+  cancel-in-progress: true
+
+jobs:
+  patch-validate-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: automation/transport-shutdown-fix
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260
+        with:
+          sdk: 3.12.0
+      - name: Patch transport shutdown ordering
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          nats = Path('packages/podbus_nats/lib/src/nats_jetstream_job_queue.dart')
+          text = nats.read_text()
+          text = text.replace(
+              '  var _connected = false;\n  var _closing = false;\n',
+              '  var _connected = false;\n  var _closing = false;\n  Future<void>? _closeFuture;\n',
+              1,
+          )
+          old = '''  @override
+          Future<void> close({Duration? timeout}) async {
+            if (_closing) {
+              return;
+            }
+            _closing = true;
+            _connected = false;
+            final effectiveTimeout = timeout ?? messagingConfig.shutdownTimeout;
+            Object? failure;
+            StackTrace? failureStackTrace;
+
+            try {
+              await Future.wait([
+                for (final worker in _workers.toList()) worker.close(),
+              ]).timeout(effectiveTimeout);
+              _workers.clear();
+              await _adapter.drain().timeout(effectiveTimeout);
+            } on Object catch (error, stackTrace) {
+              failure = error;
+              failureStackTrace = stackTrace;
+            } finally {
+              try {
+                await _adapter.close();
+              } on Object catch (error, stackTrace) {
+                failure ??= error;
+                failureStackTrace ??= stackTrace;
+              }
+              _closing = false;
+            }
+
+            if (failure != null) {
+              Error.throwWithStackTrace(failure, failureStackTrace!);
+            }
+          }
+          '''
+          new = '''  @override
+          Future<void> close({Duration? timeout}) {
+            final existing = _closeFuture;
+            if (existing != null) {
+              return existing;
+            }
+            final effectiveTimeout = timeout ?? messagingConfig.shutdownTimeout;
+            late final Future<void> closing;
+            closing = _closeResources(effectiveTimeout).whenComplete(() {
+              if (identical(_closeFuture, closing)) {
+                _closeFuture = null;
+              }
+            });
+            _closeFuture = closing;
+            return closing;
+          }
+
+          Future<void> _closeResources(Duration effectiveTimeout) async {
+            _closing = true;
+            _connected = false;
+            final workers = _workers.toList();
+            _workers.clear();
+            Object? failure;
+            StackTrace? failureStackTrace;
+
+            Future<void> guard(String component, Future<void> Function() action) async {
+              try {
+                await action().timeout(
+                  effectiveTimeout,
+                  onTimeout: () => throw MessagingTimeoutException(
+                    'NATS JetStream $component shutdown exceeded $effectiveTimeout.',
+                    timeout: effectiveTimeout,
+                  ),
+                );
+              } on Object catch (error, stackTrace) {
+                failure ??= error;
+                failureStackTrace ??= stackTrace;
+              }
+            }
+
+            try {
+              await Future.wait([
+                guard('workers', () => Future.wait([
+                  for (final worker in workers) worker.close(),
+                ])),
+                guard('adapter drain', _adapter.drain),
+              ]);
+            } finally {
+              await guard('adapter close', _adapter.close);
+              _closing = false;
+            }
+
+            if (failure != null) {
+              Error.throwWithStackTrace(failure!, failureStackTrace!);
+            }
+          }
+          '''
+          if old not in text:
+              raise SystemExit('NATS close block not found')
+          nats.write_text(text.replace(old, new, 1))
+
+          rabbit = Path('packages/podbus_rabbitmq/lib/src/rabbitmq_message_bus.dart')
+          text = rabbit.read_text()
+          text = text.replace(
+              '  var _connected = false;\n  var _closing = false;\n',
+              '  var _connected = false;\n  var _closing = false;\n  Future<void>? _closeFuture;\n',
+              1,
+          )
+          old = '''  @override
+          Future<void> close({Duration? timeout}) async {
+            if (_closing) {
+              return;
+            }
+            _closing = true;
+            _connected = false;
+            final effectiveTimeout = timeout ?? messagingConfig.shutdownTimeout;
+            Object? failure;
+            StackTrace? failureStackTrace;
+
+            try {
+              await Future.wait([
+                for (final subscription in _subscriptions.toList())
+                  subscription.close(),
+                for (final worker in _workers.toList()) worker.close(),
+              ]).timeout(effectiveTimeout);
+              _subscriptions.clear();
+              _workers.clear();
+            } on Object catch (error, stackTrace) {
+              failure = error;
+              failureStackTrace = stackTrace;
+            } finally {
+              try {
+                await _adapter.close();
+              } on Object catch (error, stackTrace) {
+                failure ??= error;
+                failureStackTrace ??= stackTrace;
+              }
+              _closing = false;
+            }
+
+            if (failure != null) {
+              Error.throwWithStackTrace(failure, failureStackTrace!);
+            }
+          }
+          '''
+          new = '''  @override
+          Future<void> close({Duration? timeout}) {
+            final existing = _closeFuture;
+            if (existing != null) {
+              return existing;
+            }
+            final effectiveTimeout = timeout ?? messagingConfig.shutdownTimeout;
+            late final Future<void> closing;
+            closing = _closeResources(effectiveTimeout).whenComplete(() {
+              if (identical(_closeFuture, closing)) {
+                _closeFuture = null;
+              }
+            });
+            _closeFuture = closing;
+            return closing;
+          }
+
+          Future<void> _closeResources(Duration effectiveTimeout) async {
+            _closing = true;
+            _connected = false;
+            final subscriptions = _subscriptions.toList();
+            final workers = _workers.toList();
+            _subscriptions.clear();
+            _workers.clear();
+            Object? failure;
+            StackTrace? failureStackTrace;
+
+            Future<void> guard(String component, Future<void> Function() action) async {
+              try {
+                await action().timeout(
+                  effectiveTimeout,
+                  onTimeout: () => throw MessagingTimeoutException(
+                    'RabbitMQ $component shutdown exceeded $effectiveTimeout.',
+                    timeout: effectiveTimeout,
+                  ),
+                );
+              } on Object catch (error, stackTrace) {
+                failure ??= error;
+                failureStackTrace ??= stackTrace;
+              }
+            }
+
+            try {
+              await Future.wait([
+                guard('adapter', _adapter.close),
+                guard('subscriptions and workers', () => Future.wait([
+                  for (final subscription in subscriptions) subscription.close(),
+                  for (final worker in workers) worker.close(),
+                ])),
+              ]);
+            } finally {
+              _closing = false;
+            }
+
+            if (failure != null) {
+              Error.throwWithStackTrace(failure!, failureStackTrace!);
+            }
+          }
+          '''
+          if old not in text:
+              raise SystemExit('RabbitMQ close block not found')
+          rabbit.write_text(text.replace(old, new, 1))
+          PY
+          dart format packages/podbus_nats/lib/src/nats_jetstream_job_queue.dart packages/podbus_rabbitmq/lib/src/rabbitmq_message_bus.dart
+      - name: Validate source
+        run: |
+          dart pub get
+          dart analyze .
+          dart test packages/podbus_core/test packages/podbus_nats/test packages/podbus_rabbitmq/test --exclude-tags=integration
+      - name: Validate real broker process exit
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tool/ci/start_integration_services.sh nats rabbitmq toxiproxy
+          bash tool/ci/wait_for_nats.sh
+          bash tool/ci/wait_for_rabbitmq.sh
+          bash tool/ci/wait_for_toxiproxy.sh
+          for scenario in nats-tcp-partition rabbitmq-tcp-partition rabbitmq-channel-failures; do
+            timeout --signal=TERM --kill-after=5s 2m \
+              dart run tool/fault_suite.dart \
+                --profile=smoke \
+                --scenario="$scenario" \
+                --report="test-results/fix-$scenario.json"
+          done
+      - name: Stop brokers
+        if: always()
+        run: docker compose -f docker-compose.integration.yaml down -v --remove-orphans
+      - name: Publish source-only fix
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add packages/podbus_nats/lib/src/nats_jetstream_job_queue.dart packages/podbus_rabbitmq/lib/src/rabbitmq_message_bus.dart
+          git commit -m "Close transport workers and adapters concurrently"
+          git push origin HEAD:automation/transport-shutdown-fix
