@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: recovery-task-drain-${{ github.ref }}
@@ -16,82 +16,103 @@ env:
 
 jobs:
   recovery-task-drain:
-    name: Recovery task drain validation
+    name: AOT fault handle diagnostics
     if: github.event_name == 'pull_request' && github.head_ref == 'trigger/recovery-task-drain-v3'
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           ref: automation/recovery-task-drain
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
       - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260
         with:
           sdk: ${{ env.DART_SDK }}
-      - name: Apply recovery task drain patch
+      - name: Apply and validate recovery patch
         run: |
           python3 tool/ci/apply_recovery_task_drain.py
           dart format packages/podbus_core/lib/src/resilience.dart
-      - name: Validate source
-        shell: bash
-        run: |
-          set +e
-          mkdir -p test-results
-          {
-            dart pub get &&
-            dart analyze . &&
-            dart test packages/podbus_core/test/resilience_test.dart
-          } > test-results/recovery-drain-validation.log 2>&1
-          status=$?
-          cat test-results/recovery-drain-validation.log
-          exit "$status"
-      - name: Upload validation diagnostics
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: recovery-task-drain-validation
-          path: test-results/recovery-drain-validation.log
-          if-no-files-found: warn
-          retention-days: 7
-      - name: Validate real broker fault process exit
+          dart pub get
+          dart analyze .
+          dart test packages/podbus_core/test/resilience_test.dart
+      - name: Capture NATS AOT handles after successful report
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p build test-results
+          sudo apt-get update >/dev/null
+          sudo apt-get install -y strace lsof >/dev/null
+          mkdir -p build test-results/aot-handles
           dart compile exe tool/fault_suite.dart -o build/podbus-fault-suite
           bash tool/ci/start_integration_services.sh nats rabbitmq toxiproxy
           bash tool/ci/wait_for_nats.sh
           bash tool/ci/wait_for_rabbitmq.sh
           bash tool/ci/wait_for_toxiproxy.sh
-          for scenario in nats-tcp-partition rabbitmq-tcp-partition rabbitmq-channel-failures; do
-            report="test-results/recovery-drain-${scenario}.json"
-            timeout --signal=TERM --kill-after=5s 2m \
-              build/podbus-fault-suite \
-                --profile=smoke \
-                --scenario="$scenario" \
-                --report="$report"
-            python3 - "$report" "$scenario" <<'PY'
+          report=test-results/aot-handles/nats.json
+          build/podbus-fault-suite \
+            --profile=smoke \
+            --scenario=nats-tcp-partition \
+            --report="$report" \
+            > test-results/aot-handles/stdout.log 2>&1 &
+          pid=$!
+          echo "$pid" > test-results/aot-handles/pid.txt
+          for _ in $(seq 1 120); do
+            if [[ -s "$report" ]]; then
+              break
+            fi
+            if ! kill -0 "$pid" 2>/dev/null; then
+              wait "$pid"
+              exit $?
+            fi
+            sleep 1
+          done
+          test -s "$report"
+          python3 - "$report" <<'PY'
           import json
           import pathlib
           import sys
           data = json.loads(pathlib.Path(sys.argv[1]).read_text())
-          scenario = sys.argv[2]
           assert data['success'] is True, data
-          assert len(data['results']) == 1, data
-          assert data['results'][0]['name'] == scenario, data
-          assert data['results'][0]['success'] is True, data
           PY
-          done
+          sleep 3
+          if kill -0 "$pid" 2>/dev/null; then
+            {
+              echo '=== status ==='
+              cat "/proc/$pid/status"
+              echo '=== fd ==='
+              ls -la "/proc/$pid/fd"
+              echo '=== fd targets ==='
+              for fd in /proc/$pid/fd/*; do
+                printf '%s -> ' "$fd"
+                readlink "$fd" || true
+              done
+              echo '=== lsof ==='
+              sudo lsof -nP -p "$pid" || true
+              echo '=== sockets ==='
+              sudo ss -anpt || true
+              echo '=== task stacks ==='
+              for task in /proc/$pid/task/*; do
+                echo "--- $task ---"
+                sudo cat "$task/stack" || true
+              done
+            } > test-results/aot-handles/handles.txt 2>&1
+            sudo timeout 8s strace -ff -tt -T -p "$pid" \
+              -o test-results/aot-handles/strace || true
+            kill -TERM "$pid" || true
+            sleep 2
+            kill -KILL "$pid" 2>/dev/null || true
+            wait "$pid" || true
+            echo 'AOT process remained alive after a successful report.' >&2
+            exit 1
+          fi
+          wait "$pid"
+      - name: Upload AOT handle diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: aot-fault-handle-diagnostics
+          path: test-results/aot-handles
+          if-no-files-found: error
+          retention-days: 7
       - name: Stop brokers
         if: always()
         run: docker compose -f docker-compose.integration.yaml down -v --remove-orphans
-      - name: Publish source-only fix
-        shell: bash
-        run: |
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git rm tool/ci/apply_recovery_task_drain.py
-          git add packages/podbus_core/lib/src/resilience.dart
-          git commit -m "Drain in-flight recovery tasks during shutdown"
-          git push origin HEAD:automation/recovery-task-drain
