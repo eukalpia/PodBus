@@ -34,10 +34,26 @@ jobs:
           python3 tool/ci/apply_recovery_task_drain.py
           dart format packages/podbus_core/lib/src/resilience.dart
       - name: Validate source
+        shell: bash
         run: |
-          dart pub get
-          dart analyze .
-          dart test packages/podbus_core/test/resilience_test.dart
+          set +e
+          mkdir -p test-results
+          {
+            dart pub get &&
+            dart analyze . &&
+            dart test packages/podbus_core/test/resilience_test.dart
+          } > test-results/recovery-drain-validation.log 2>&1
+          status=$?
+          cat test-results/recovery-drain-validation.log
+          exit "$status"
+      - name: Upload validation diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: recovery-task-drain-validation
+          path: test-results/recovery-drain-validation.log
+          if-no-files-found: warn
+          retention-days: 7
       - name: Validate real broker fault process exit
         shell: bash
         run: |
