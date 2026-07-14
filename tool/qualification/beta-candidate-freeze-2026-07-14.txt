@@ -1,0 +1,3 @@
+PodBus 0.1.0-beta.1 final frozen qualification head.
+
+No repository writes are permitted until all mandatory workflows complete on this exact commit.
