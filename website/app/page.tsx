@@ -56,21 +56,21 @@ const principles = [
 const transports = [
   {
     name: 'NATS Core',
-    status: 'Reference',
+    status: 'Beta',
     slug: 'nats-core',
     text: 'Low-latency events, queue groups, and request/reply where broker persistence is not required.',
   },
   {
     name: 'JetStream',
-    status: 'Reference',
+    status: 'Beta',
     slug: 'jetstream',
-    text: 'Durable workers with retained messages, acknowledgement, redelivery, and consumer state.',
+    text: 'Durable workers with retained messages, PubAck, acknowledgement, redelivery, and consumer state.',
   },
   {
     name: 'RabbitMQ',
-    status: 'Beta candidate',
+    status: 'Beta',
     slug: 'rabbitmq',
-    text: 'Topic routing, publisher confirms, bounded consumers, TTL/DLX retries, and dead letters.',
+    text: 'Topic routing, publisher-confirm lanes, bounded consumers, TTL/DLX retries, and dead letters.',
   },
   {
     name: 'Kafka',
@@ -83,19 +83,83 @@ const transports = [
 const qualificationProofs = [
   {
     title: '3.25 million',
-    text: 'Mandatory messages completed across NATS Core, JetStream, and RabbitMQ on one pinned revision.',
+    text: 'Mandatory NATS Core, JetStream, and RabbitMQ messages completed on the qualified revision.',
   },
   {
     title: '12 fault paths',
-    text: 'Partitions, crashes, channel failures, confirmation loss, multi-replica workers, and slow consumers.',
+    text: 'Partitions, crashes, channel failures, confirmation loss, replicas, and slow consumers.',
   },
   {
-    title: '1-hour soak',
-    text: 'Continuous NATS and RabbitMQ traffic with disruption, recovery, shutdown, and retained evidence.',
+    title: '61m 41.859s',
+    text: 'One continuous disruption soak with 28 injected faults and zero missing acknowledged messages.',
   },
   {
     title: '2 Dart tracks',
     text: 'Static analysis and unit tests run on Dart 3.12.0 and the current stable SDK.',
+  },
+];
+
+const benchmarkResults = [
+  {
+    transport: 'NATS Core',
+    mode: 'Queue group · isolated publisher and consumers',
+    messages: '1,000,000 unique · 0 duplicates',
+    throughput: '42,501.6 msg/s',
+    elapsed: '23.528 s',
+  },
+  {
+    transport: 'JetStream',
+    mode: 'Memory · PubAck + manual ack',
+    messages: '250,000 unique · 0 duplicates',
+    throughput: '2,928.9 msg/s',
+    elapsed: '85.356 s',
+  },
+  {
+    transport: 'JetStream',
+    mode: 'File worker · PubAck + manual ack',
+    messages: '250,000 unique · 0 duplicates',
+    throughput: '2,371.2 msg/s',
+    elapsed: '105.432 s',
+  },
+  {
+    transport: 'RabbitMQ',
+    mode: 'Non-persistent · publisher confirms',
+    messages: '1,000,000 received',
+    throughput: '5,040.8 msg/s',
+    elapsed: '198.379 s',
+  },
+  {
+    transport: 'RabbitMQ',
+    mode: 'Persistent queue/messages · confirms',
+    messages: '500,000 received',
+    throughput: '1,705.5 msg/s',
+    elapsed: '293.165 s',
+  },
+  {
+    transport: 'RabbitMQ',
+    mode: 'Durable workers · confirms + manual ack',
+    messages: '250,000 received',
+    throughput: '1,404.6 msg/s',
+    elapsed: '177.982 s',
+  },
+];
+
+const soakResults = [
+  {
+    title: '0 missing',
+    text: '25,004 acknowledged enqueues and 25,004 unique deliveries on both JetStream and RabbitMQ.',
+  },
+  {
+    title: '28 faults',
+    text: 'Alternating NATS partitions, RabbitMQ partitions, and RabbitMQ broker restarts.',
+  },
+  {
+    title: '13.401 s p95',
+    text: 'Recovery latency p50 was 967 ms; the maximum observed recovery was 13.704 seconds.',
+  },
+  {
+    title: '+52.2 MiB RSS',
+    text: 'Memory growth stayed far below the configured 512 MiB qualification threshold.',
   },
 ];
 
@@ -173,12 +237,12 @@ export default function HomePage() {
         <div className="page-shell">
           <header className="home-heading docs-home-heading">
             <div>
-              <span>Beta candidate</span>
+              <span>0.1.0-beta.1</span>
               <h2>Evidence before adjectives.</h2>
             </div>
             <p>
-              Every qualification claim is tied to one revision, one workload,
-              one acknowledgement contract, and retained CI evidence.
+              Every beta claim is tied to an explicit workload, acknowledgement
+              contract, clean broker environment, and retained CI evidence.
             </p>
           </header>
           <div className="principle-grid">
@@ -192,6 +256,60 @@ export default function HomePage() {
           <Link className="text-link" href="/docs/beta-qualification">
             Inspect the complete qualification <ChevronRightIcon />
           </Link>
+        </div>
+      </section>
+
+      <section className="home-section">
+        <div className="page-shell">
+          <header className="home-heading docs-home-heading">
+            <div>
+              <span>Measured baseline</span>
+              <h2>Six completed transport profiles.</h2>
+            </div>
+            <p>
+              GitHub-hosted Ubuntu, four logical CPUs, Dart 3.12.0, and 256-byte
+              payloads. Results are regression evidence—not cross-broker promises.
+            </p>
+          </header>
+          <div className="principle-grid">
+            {benchmarkResults.map((result) => (
+              <article
+                key={`${result.transport}-${result.mode}`}
+                className="principle-card"
+              >
+                <span className="section-label">{result.transport}</span>
+                <h3>{result.throughput}</h3>
+                <p>{result.mode}</p>
+                <p><strong>{result.messages}</strong> · {result.elapsed}</p>
+              </article>
+            ))}
+          </div>
+          <Link className="text-link" href="/docs/beta-qualification">
+            Read the benchmark methodology <ChevronRightIcon />
+          </Link>
+        </div>
+      </section>
+
+      <section className="home-section home-surface-section">
+        <div className="page-shell">
+          <header className="home-heading docs-home-heading">
+            <div>
+              <span>One-hour resilience soak</span>
+              <h2>Disruption without silent loss.</h2>
+            </div>
+            <p>
+              61 minutes 41.859 seconds of continuous JetStream and RabbitMQ traffic,
+              with partitions and broker restarts injected throughout the run.
+            </p>
+          </header>
+          <div className="principle-grid">
+            {soakResults.map((result) => (
+              <article key={result.title} className="principle-card">
+                <h3>{result.title}</h3>
+                <p>{result.text}</p>
+              </article>
+            ))}
+          </div>
         </div>
       </section>
 
@@ -347,8 +465,8 @@ export default function HomePage() {
             <span>Open source · Apache 2.0</span>
             <h2>Build the message path you can explain during an incident.</h2>
             <p>
-              Start with the reference NATS adapters, require the capabilities your
-              service depends on, and keep business side effects idempotent.
+              Start with a qualified adapter, require the capabilities your service
+              depends on, and keep business side effects idempotent.
             </p>
             <div className="hero-actions">
               <Link className="primary-button" href="/docs/introduction">
