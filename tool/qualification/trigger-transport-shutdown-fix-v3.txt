@@ -1,0 +1,1 @@
+Validate force-closing transport adapters before waiting for worker shutdown.
