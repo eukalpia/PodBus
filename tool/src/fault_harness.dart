@@ -61,16 +61,18 @@ final class FaultEnvironment {
   }) async {
     await waitUntil(
       () async {
+        Socket? socket;
         try {
-          final socket = await Socket.connect(
+          socket = await Socket.connect(
             host,
             port,
             timeout: const Duration(milliseconds: 500),
           );
-          await socket.close();
           return true;
         } on Object {
           return false;
+        } finally {
+          socket?.destroy();
         }
       },
       timeout: timeout,
@@ -250,25 +252,116 @@ final class ToxiproxyClient {
     String path, {
     Map<String, Object?>? body,
   }) async {
-    final client = HttpClient();
+    Socket? socket;
     try {
       final uri = baseUri.resolve(path);
-      final request = await client
-          .openUrl(method, uri)
-          .timeout(const Duration(seconds: 3));
-      request.persistentConnection = false;
-      request.headers.contentType = ContentType.json;
-      if (body != null) {
-        request.write(jsonEncode(body));
+      final port = uri.hasPort
+          ? uri.port
+          : uri.scheme == 'https'
+          ? 443
+          : 80;
+      if (uri.scheme != 'http') {
+        throw ArgumentError.value(
+          uri,
+          'baseUri',
+          'Fault-control HTTP requires a local http endpoint.',
+        );
       }
-      final response = await request.close().timeout(
-        const Duration(seconds: 5),
+      socket = await Socket.connect(
+        uri.host,
+        port,
+        timeout: const Duration(seconds: 3),
       );
-      final responseBody = await utf8.decoder.bind(response).join();
-      return _HttpResult(response.statusCode, responseBody);
+      socket.setOption(SocketOption.tcpNoDelay, true);
+
+      final payload = body == null ? const <int>[] : utf8.encode(jsonEncode(body));
+      final target = uri.hasQuery ? '${uri.path}?${uri.query}' : uri.path;
+      final request = StringBuffer()
+        ..write('$method ${target.isEmpty ? '/' : target} HTTP/1.1\r\n')
+        ..write('Host: ${uri.host}:$port\r\n')
+        ..write('Accept: application/json\r\n')
+        ..write('Connection: close\r\n')
+        ..write('Content-Type: application/json\r\n')
+        ..write('Content-Length: ${payload.length}\r\n\r\n');
+      socket.add(utf8.encode(request.toString()));
+      if (payload.isNotEmpty) {
+        socket.add(payload);
+      }
+      await socket.flush();
+
+      final bytes = <int>[];
+      await for (final chunk in socket.timeout(const Duration(seconds: 5))) {
+        bytes.addAll(chunk);
+      }
+      return _parseHttpResponse(bytes);
     } finally {
-      client.close(force: true);
+      socket?.destroy();
     }
+  }
+
+  _HttpResult _parseHttpResponse(List<int> bytes) {
+    final raw = latin1.decode(bytes);
+    final separator = raw.indexOf('\r\n\r\n');
+    if (separator < 0) {
+      throw FormatException('Malformed HTTP response from Toxiproxy.');
+    }
+    final headerText = raw.substring(0, separator);
+    final headerLines = headerText.split('\r\n');
+    final statusParts = headerLines.first.split(' ');
+    if (statusParts.length < 2) {
+      throw FormatException('Malformed HTTP status line: ${headerLines.first}');
+    }
+    final statusCode = int.parse(statusParts[1]);
+    final headers = <String, String>{};
+    for (final line in headerLines.skip(1)) {
+      final colon = line.indexOf(':');
+      if (colon > 0) {
+        headers[line.substring(0, colon).trim().toLowerCase()] = line
+            .substring(colon + 1)
+            .trim();
+      }
+    }
+    final bodyBytes = bytes.sublist(separator + 4);
+    final responseBody = headers['transfer-encoding']?.toLowerCase() == 'chunked'
+        ? utf8.decode(_decodeChunked(bodyBytes))
+        : utf8.decode(bodyBytes);
+    return _HttpResult(statusCode, responseBody);
+  }
+
+  List<int> _decodeChunked(List<int> bytes) {
+    final result = <int>[];
+    var offset = 0;
+    while (offset < bytes.length) {
+      final lineEnd = _indexOfCrlf(bytes, offset);
+      if (lineEnd < 0) {
+        throw const FormatException('Malformed chunked HTTP response.');
+      }
+      final sizeText = ascii.decode(bytes.sublist(offset, lineEnd)).split(';').first;
+      final size = int.parse(sizeText.trim(), radix: 16);
+      offset = lineEnd + 2;
+      if (size == 0) {
+        return result;
+      }
+      if (offset + size + 2 > bytes.length) {
+        throw const FormatException('Truncated chunked HTTP response.');
+      }
+      result.addAll(bytes.sublist(offset, offset + size));
+      offset += size;
+      if (bytes[offset] != 13 || bytes[offset + 1] != 10) {
+        throw const FormatException('Malformed chunk delimiter.');
+      }
+      offset += 2;
+    }
+    throw const FormatException('Missing final HTTP chunk.');
+  }
+
+  int _indexOfCrlf(List<int> bytes, int start) {
+    for (var index = start; index + 1 < bytes.length; index += 1) {
+      if (bytes[index] == 13 && bytes[index + 1] == 10) {
+        return index;
+      }
+    }
+    return -1;
   }
 
   void _expectSuccess(_HttpResult response, String action) {
