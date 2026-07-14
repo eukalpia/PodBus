@@ -1,0 +1,1 @@
+Second trigger path for the recovery task drain executor.
