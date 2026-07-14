@@ -1,8 +1,16 @@
 name: podbus_kafka
-description: Experimental Kafka event-log adapter for PodBus.
-version: 0.1.0-alpha.1
+description: Experimental Kafka adapter for PodBus with native librdkafka producers, consumer groups, and delivery policies.
+version: 0.1.0-beta.1
 repository: https://github.com/eukalpia/PodBus
-publish_to: none
+homepage: https://github.com/eukalpia/PodBus
+documentation: https://github.com/eukalpia/PodBus/tree/main/docs
+issue_tracker: https://github.com/eukalpia/PodBus/issues
+topics:
+  - kafka
+  - messaging
+  - event-streaming
+  - ffi
+  - backend
 
 environment:
   sdk: ^3.12.0
@@ -12,8 +20,7 @@ resolution: workspace
 dependencies:
   ffi: ^2.1.4
   meta: ^1.17.0
-  podbus_core:
-    path: ../podbus_core
+  podbus_core: ^0.1.0-beta.1
 
 dev_dependencies:
   lints: ^6.0.0

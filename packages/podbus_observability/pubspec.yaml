@@ -1,8 +1,16 @@
 name: podbus_observability
-description: Structured logging, Prometheus metrics, and trace propagation for PodBus.
-version: 0.1.0-alpha.1
+description: Trace propagation, Prometheus metrics, structured logging, and health reporting for PodBus services.
+version: 0.1.0-beta.1
 repository: https://github.com/eukalpia/PodBus
-publish_to: none
+homepage: https://github.com/eukalpia/PodBus
+documentation: https://github.com/eukalpia/PodBus/tree/main/docs
+issue_tracker: https://github.com/eukalpia/PodBus/issues
+topics:
+  - observability
+  - prometheus
+  - tracing
+  - logging
+  - messaging
 
 environment:
   sdk: ^3.12.0
@@ -10,8 +18,7 @@ environment:
 resolution: workspace
 
 dependencies:
-  podbus_core:
-    path: ../podbus_core
+  podbus_core: ^0.1.0-beta.1
 
 dev_dependencies:
   lints: ^6.0.0

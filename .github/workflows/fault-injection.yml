@@ -1,0 +1,145 @@
+name: Broker fault injection
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Fault-suite profile
+        required: true
+        default: smoke
+        type: choice
+        options:
+          - smoke
+          - full
+
+permissions:
+  contents: read
+
+concurrency:
+  group: podbus-broker-fault-qualification
+  cancel-in-progress: true
+
+env:
+  DART_SDK: 3.12.0
+  PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profile || 'smoke' }}
+
+jobs:
+  changes:
+    name: Detect fault-suite changes
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.detect.outputs.run }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 2
+      - id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed="$(git diff --name-only HEAD^ HEAD)"
+          printf '%s\n' "$changed"
+          if grep -Eq '^(packages/podbus_(core|nats|rabbitmq)/|tool/(fault_|src/fault_harness|ci/(start_integration_services|capture_rabbitmq_state|wait_for_rabbitmq)|qualification/beta-candidate)|docker-compose\.integration\.yaml$|\.github/workflows/fault-injection\.yml$)' <<< "$changed"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  broker-faults:
+    name: fault / ${{ matrix.scenario }}
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        scenario:
+          - nats-tcp-partition
+          - rabbitmq-tcp-partition
+          - rabbitmq-channel-failures
+          - nats-crash-before-ack
+          - rabbitmq-crash-before-ack
+          - multiple-replicas
+          - nats-broker-stop-before-confirm
+          - rabbitmq-broker-stop-before-confirm
+          - nats-shutdown-during-dlq-ack
+          - rabbitmq-shutdown-during-retry-confirm
+          - rabbitmq-shutdown-during-dlq-confirm
+          - slow-consumers
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260
+        with:
+          sdk: ${{ env.DART_SDK }}
+      - name: Resolve dependencies
+        run: dart pub get
+      - name: Compile fault suite
+        run: |
+          mkdir -p build test-results
+          dart compile exe tool/fault_suite.dart -o build/podbus-fault-suite
+      - name: Start clean brokers and Toxiproxy
+        run: bash tool/ci/start_integration_services.sh nats rabbitmq toxiproxy
+      - name: Wait for services
+        run: |
+          bash tool/ci/wait_for_nats.sh
+          bash tool/ci/wait_for_rabbitmq.sh
+          bash tool/ci/wait_for_toxiproxy.sh
+      - name: Run isolated broker fault scenario
+        shell: bash
+        env:
+          SCENARIO: ${{ matrix.scenario }}
+        run: |
+          set -euo pipefail
+          report="test-results/fault-${SCENARIO}.json"
+          timeout --signal=TERM --kill-after=15s 10m \
+            build/podbus-fault-suite \
+              --profile="${PROFILE}" \
+              --scenario="${SCENARIO}" \
+              --report="${report}"
+          python3 - "$report" "$SCENARIO" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          scenario = sys.argv[2]
+          if not path.is_file():
+              raise SystemExit(f'missing fault report: {path}')
+          data = json.loads(path.read_text())
+          if data.get('success') is not True:
+              raise SystemExit(f'fault scenario failed: {scenario}: {data}')
+          results = data.get('results', [])
+          if len(results) != 1 or results[0].get('name') != scenario or results[0].get('success') is not True:
+              raise SystemExit(f'unexpected fault report for {scenario}: {data}')
+          print(f'validated {scenario}: {results[0].get("durationMs")} ms')
+          PY
+      - name: Capture broker logs
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p test-results
+          docker compose -f docker-compose.integration.yaml ps -a \
+            > test-results/compose-ps-final.txt 2>&1 || true
+          docker compose -f docker-compose.integration.yaml logs --no-color \
+            nats rabbitmq-init rabbitmq toxiproxy \
+            > test-results/fault-brokers.log 2>&1 || true
+          bash tool/ci/capture_rabbitmq_state.sh || true
+      - name: Upload fault diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fault-${{ matrix.scenario }}-${{ env.PROFILE }}
+          path: test-results
+          if-no-files-found: error
+          retention-days: 30
+      - name: Stop services
+        if: always()
+        run: docker compose -f docker-compose.integration.yaml down -v --remove-orphans

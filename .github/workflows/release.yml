@@ -14,7 +14,7 @@ jobs:
   release:
     name: Verify and publish release artifacts
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     environment: release
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -39,6 +39,8 @@ jobs:
             packages/podbus_observability/test \
             packages/podbus_serverpod/test \
             --exclude-tags=integration
+      - name: Validate pub.dev archives
+        run: dart run tool/publish_packages.dart --dry-run
       - name: Verify tag matches package version
         shell: bash
         run: |
@@ -73,6 +75,7 @@ jobs:
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           generate_release_notes: true
+          prerelease: true
           fail_on_unmatched_files: true
           files: |
             PodBus-${{ github.ref_name }}.tar.gz
