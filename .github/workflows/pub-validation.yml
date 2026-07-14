@@ -1,0 +1,34 @@
+name: Pub validation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pub-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DART_SDK: 3.12.0
+
+jobs:
+  dry-run:
+    name: Validate pub.dev archives
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
+        with:
+          sdk: ${{ env.DART_SDK }}
+      - name: Resolve workspace
+        run: dart pub get
+      - name: Verify release metadata
+        run: dart run tool/verify_release.dart --check
+      - name: Dry-run every package in publication order
+        run: dart run tool/publish_packages.dart --dry-run

@@ -11,6 +11,7 @@ const _packages = <String>[
 ];
 
 const _repository = 'https://github.com/eukalpia/PodBus';
+const _issueTracker = 'https://github.com/eukalpia/PodBus/issues';
 
 void main(List<String> arguments) {
   if (!arguments.contains('--check')) {
@@ -23,31 +24,44 @@ void main(List<String> arguments) {
   final versions = <String, String>{};
 
   for (final package in _packages) {
-    final path = 'packages/$package/pubspec.yaml';
-    final file = File(path);
-    if (!file.existsSync()) {
-      failures.add('Missing $path.');
+    final packageDirectory = Directory('packages/$package');
+    final pubspec = File('${packageDirectory.path}/pubspec.yaml');
+    if (!pubspec.existsSync()) {
+      failures.add('Missing ${pubspec.path}.');
       continue;
     }
 
-    final fields = _topLevelFields(file.readAsLinesSync());
+    final content = pubspec.readAsStringSync();
+    final fields = _topLevelFields(content.split('\n'));
     final version = fields['version'];
-    final repository = fields['repository'];
-    final publishTo = fields['publish_to'];
 
     if (version == null || version.isEmpty) {
-      failures.add('$path does not declare a version.');
+      failures.add('${pubspec.path} does not declare a version.');
     } else {
       versions[package] = version;
     }
-    if (repository != _repository) {
-      failures.add('$path repository must be $_repository.');
+    if (fields['repository'] != _repository) {
+      failures.add('${pubspec.path} repository must be $_repository.');
     }
-    if (publishTo != 'none') {
+    if (fields['issue_tracker'] != _issueTracker) {
+      failures.add('${pubspec.path} issue_tracker must be $_issueTracker.');
+    }
+    if (fields.containsKey('publish_to')) {
       failures.add(
-        '$path must keep publish_to: none until package publishing is enabled '
-        'deliberately.',
+        '${pubspec.path} must use the default pub.dev publisher; remove publish_to.',
       );
+    }
+    if (content.contains(
+      RegExp(r'^\s+path:\s+\.\./podbus_', multiLine: true),
+    )) {
+      failures.add('${pubspec.path} contains a local PodBus path dependency.');
+    }
+
+    for (final filename in const ['README.md', 'CHANGELOG.md', 'LICENSE']) {
+      final file = File('${packageDirectory.path}/$filename');
+      if (!file.existsSync() || file.lengthSync() == 0) {
+        failures.add('Missing non-empty ${file.path}.');
+      }
     }
   }
 
@@ -55,11 +69,45 @@ void main(List<String> arguments) {
     failures.add('Package versions are inconsistent: $versions.');
   }
 
+  final version = versions.values.isEmpty ? null : versions.values.first;
+  if (version != null) {
+    if (!version.contains('-beta.')) {
+      failures.add('Expected a beta version, found $version.');
+    }
+    for (final package in _packages.where((name) => name != 'podbus_core')) {
+      final content = File('packages/$package/pubspec.yaml').readAsStringSync();
+      if (!content.contains('podbus_core: ^$version')) {
+        failures.add(
+          'packages/$package/pubspec.yaml must depend on podbus_core: ^$version.',
+        );
+      }
+    }
+    for (final package in _packages) {
+      final changelog = File(
+        'packages/$package/CHANGELOG.md',
+      ).readAsStringSync();
+      if (!changelog.contains(version)) {
+        failures.add(
+          'packages/$package/CHANGELOG.md does not mention $version.',
+        );
+      }
+    }
+    final readme = File('README.md').readAsStringSync();
+    if (!readme.contains(version) || !readme.contains('status-beta')) {
+      failures.add('README.md must advertise $version and beta status.');
+    }
+    final changelog = File('CHANGELOG.md').readAsStringSync();
+    if (!changelog.contains('## $version')) {
+      failures.add('CHANGELOG.md does not contain a $version release section.');
+    }
+  }
+
   for (final requiredPath in const [
     'README.md',
     'CHANGELOG.md',
     'SECURITY.md',
     'LICENSE',
+    'tool/publish_packages.dart',
   ]) {
     if (!File(requiredPath).existsSync()) {
       failures.add('Missing required release file $requiredPath.');
@@ -74,8 +122,7 @@ void main(List<String> arguments) {
     return;
   }
 
-  final version = versions.values.isEmpty ? 'unknown' : versions.values.first;
-  stdout.writeln('Release metadata is consistent for $version.');
+  stdout.writeln('Release metadata is publish-ready for $version.');
 }
 
 Map<String, String> _topLevelFields(List<String> lines) {
@@ -101,9 +148,7 @@ String _unquote(String value) {
   }
   final first = value[0];
   final last = value[value.length - 1];
-  final doubleQuoted = first == '"' && last == '"';
-  final singleQuoted = first == "'" && last == "'";
-  if (doubleQuoted || singleQuoted) {
+  if ((first == '"' && last == '"') || (first == "'" && last == "'")) {
     return value.substring(1, value.length - 1);
   }
   return value;

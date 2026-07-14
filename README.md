@@ -3,26 +3,32 @@
 </p>
 
 <p align="center">
-  Messaging and durable jobs for Dart, without flattening every broker into the same abstraction.
+  <strong>Transport-aware messaging and durable jobs for Dart and Serverpod.</strong><br />
+  Shared application contracts without pretending that different brokers provide identical guarantees.
 </p>
 
 <p align="center">
   <a href="https://github.com/eukalpia/PodBus/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/eukalpia/PodBus/actions/workflows/ci.yml/badge.svg" /></a>
+  <a href="https://github.com/eukalpia/PodBus/actions/workflows/pub-validation.yml"><img alt="Pub validation" src="https://github.com/eukalpia/PodBus/actions/workflows/pub-validation.yml/badge.svg" /></a>
   <a href="https://github.com/eukalpia/PodBus/actions/workflows/compatibility.yml"><img alt="Compatibility" src="https://github.com/eukalpia/PodBus/actions/workflows/compatibility.yml/badge.svg" /></a>
   <a href="https://github.com/eukalpia/PodBus/actions/workflows/security.yml"><img alt="Security" src="https://github.com/eukalpia/PodBus/actions/workflows/security.yml/badge.svg" /></a>
   <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" /></a>
   <img alt="Dart SDK" src="https://img.shields.io/badge/Dart-%5E3.12.0-0175C2?logo=dart" />
-  <img alt="Status" src="https://img.shields.io/badge/status-alpha-orange" />
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.0--beta.1-blueviolet" />
+  <img alt="Status" src="https://img.shields.io/badge/status-beta-22c55e" />
 </p>
 
-PodBus is a Dart toolkit for message-driven services. It provides a common API for publish/subscribe, request/reply, durable workers, retries, dead letters, typed payloads, health checks, and Serverpod integration.
+PodBus is a Dart toolkit for message-driven services. It provides a common API for publish/subscribe, request/reply, durable workers, retries, dead letters, typed payloads, health checks, observability, PostgreSQL reliability primitives, and optional Serverpod integration.
 
 The abstraction stops where broker semantics diverge. Applications can inspect transport capabilities at startup instead of discovering an unsupported guarantee after deployment.
 
-PodBus is not a broker. It runs on top of NATS, RabbitMQ, Kafka, and PostgreSQL-backed reliability primitives.
+PodBus is **not a broker**. It runs on top of NATS, RabbitMQ, Kafka, and PostgreSQL-backed reliability primitives.
 
 > [!IMPORTANT]
-> PodBus is currently `0.1.0-alpha.1`. NATS Core and JetStream are the reference transports. RabbitMQ is suitable for controlled production evaluation. Kafka is experimental. Public APIs may still change before the first stable release.
+> PodBus `0.1.0-beta.1` is a public beta candidate. NATS Core and JetStream are the reference transports. RabbitMQ is suitable for controlled production evaluation. Kafka remains experimental. Public APIs may change before `1.0.0`.
+
+> [!WARNING]
+> Broker-backed workers use at-least-once delivery. PodBus does not claim exactly-once external side effects. Make handlers and externally visible operations idempotent.
 
 ## What is included
 
@@ -36,23 +42,42 @@ PodBus is not a broker. It runs on top of NATS, RabbitMQ, Kafka, and PostgreSQL-
 - Serverpod lifecycle and per-message session helpers
 - Bounded concurrency, payload limits, graceful shutdown, and transport health reporting
 
-## Quick start
+## Packages
 
-The packages are not published to pub.dev yet. The example below tracks `main`; pin a commit in any project where reproducible builds matter.
+| Package | Responsibility | Maturity |
+| --- | --- | --- |
+| `podbus_core` | Contracts, codecs, policies, limits, and in-memory implementations | beta |
+| `podbus_nats` | NATS Core and JetStream adapters | beta/reference |
+| `podbus_rabbitmq` | RabbitMQ messaging and durable workers | beta |
+| `podbus_kafka` | Kafka adapter and native `librdkafka` bindings | experimental |
+| `podbus_postgres` | Transactional outbox, inbox leases, persistent idempotency | beta |
+| `podbus_observability` | Tracing, Prometheus metrics, JSON logs, health probes | beta |
+| `podbus_serverpod` | Serverpod lifecycle and session integration | beta |
+
+The packages are prepared for pub.dev but are **not published yet**. Until the beta is published, use a reviewed Git commit or branch and pin it for reproducible builds.
 
 ```yaml
 dependencies:
   podbus_core:
     git:
       url: https://github.com/eukalpia/PodBus.git
-      ref: main
+      ref: release/0.1.0-beta.1
       path: packages/podbus_core
   podbus_nats:
     git:
       url: https://github.com/eukalpia/PodBus.git
-      ref: main
+      ref: release/0.1.0-beta.1
       path: packages/podbus_nats
 ```
+
+After publication, installation becomes:
+
+```bash
+dart pub add podbus_core
+dart pub add podbus_nats
+```
+
+## Quick start
 
 Start NATS with JetStream enabled:
 
@@ -129,22 +154,14 @@ await jobs.worker<Map<String, Object?>>(
   deadLetterPolicy: const DeadLetterPolicy(
     enabled: true,
     destination: 'jobs.email.welcome.dead',
-    includeErrorDetails: true,
-    includeOriginalPayload: false,
   ),
   handler: (context, job) async {
     await sendWelcomeEmail(job['email']! as String);
   },
 );
-
-await jobs.enqueue(
-  'jobs.email.welcome',
-  {'email': 'lead@example.com'},
-  idempotencyKey: 'welcome-email:lead-42',
-);
 ```
 
-Retries and dead-letter publication complete before the source message is acknowledged, terminated, or committed. That protects delivery state; it does not make an arbitrary business side effect exactly-once.
+Retries and dead-letter publication complete before the source message is acknowledged, terminated, or committed. This protects delivery state; it does not make arbitrary business side effects exactly-once.
 
 ## Choosing a transport
 
@@ -157,8 +174,6 @@ Retries and dead-letter publication complete before the source message is acknow
 | Delayed retry | process local | — | broker NAK | TTL / DLX | — |
 | Dead-letter handling | ✓ | — | ✓ | ✓ | ✓ |
 | Manual acknowledgement or commit | — | — | ✓ | ✓ | ✓ |
-| Typed codec registry | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Maturity | development | reference | reference | beta | experimental |
 
 Use `capabilities` as the runtime source of truth:
 
@@ -170,16 +185,7 @@ queue.capabilities.requireAll({
 });
 ```
 
-A practical rule of thumb:
-
-- **NATS Core** for low-latency events and request/reply where broker persistence is not required.
-- **NATS JetStream** for durable work with explicit consumer state and redelivery.
-- **RabbitMQ** for queue-oriented workloads, routing, publisher confirms, and broker-managed retry topology.
-- **Kafka** for append-only event streams and consumer groups, while accepting that the current adapter is still experimental.
-
 ## Delivery and consistency
-
-PodBus uses **at-least-once delivery** for broker-backed workers. Duplicate delivery is expected during failures, reconnects, lease expiry, and consumer restarts.
 
 | Concern | PodBus behavior |
 | --- | --- |
@@ -190,124 +196,9 @@ PodBus uses **at-least-once delivery** for broker-backed workers. Duplicate deli
 | Ordering | determined by the selected broker and partitioning strategy |
 | Exactly-once side effects | not claimed |
 
-For business operations, treat idempotency keys, durable consumer names, and message schemas as persistent data contracts rather than implementation details.
+Treat idempotency keys, durable consumer names, and message schemas as persistent data contracts rather than implementation details.
 
-## Transactional outbox and inbox
-
-A database transaction followed by a broker publish is not atomic. `podbus_postgres` records the business change and outgoing message in the same PostgreSQL transaction.
-
-```dart
-final pool = Pool<void>.withUrl(databaseUrl);
-final outbox = PostgresOutbox(pool);
-
-await outbox.install();
-
-await pool.runTx((transaction) async {
-  await OrderRepository.insert(transaction, order);
-
-  await outbox.enqueue(
-    transaction,
-    'order.created',
-    order.toJson(),
-    key: order.id,
-    headers: MessageHeaders(correlationId: requestId),
-  );
-});
-```
-
-`PostgresOutboxRelay` publishes pending records with leases and `FOR UPDATE SKIP LOCKED`, allowing multiple relay replicas to share the same table. `PostgresInbox` and `PostgresIdempotencyStore` provide a shared deduplication boundary for consumers.
-
-See [Reliability](docs/reliability.md) for the full failure model.
-
-## Typed messages
-
-The codec registry keeps Dart types separate from stable wire names:
-
-```dart
-final codecs = MessageCodecRegistry()
-  ..register<LeadCreated>(
-    messageType: 'crm.lead-created',
-    schemaVersion: 2,
-    encode: (event) => event.toJson(),
-    decode: (json, version) {
-      return LeadCreated.fromJson(
-        json! as Map<String, Object?>,
-        schemaVersion: version,
-      );
-    },
-  );
-```
-
-The envelope carries `messageType` and `schemaVersion`. Consumers receive the incoming version and can upcast older payloads deliberately. Unknown future versions are rejected rather than guessed.
-
-## Observability
-
-`podbus_observability` is deliberately framework-neutral. It provides:
-
-- W3C `traceparent` and `tracestate` propagation
-- producer, consumer, request, and worker spans
-- a bounded-cardinality Prometheus registry
-- JSON logs with credential and personal-data redaction
-- readiness and liveness aggregation
-
-```dart
-final metrics = PrometheusRegistry(maxSeries: 2000);
-final logs = JsonMessagingLogSink(write: stdout.writeln);
-final tracer = PodBusTracer(export: spanExporter.add);
-
-final config = MessagingConfig(
-  metricHook: metrics.hook,
-  logHook: logs.hook,
-);
-
-final tracedBus = InstrumentedMessageBus(
-  delegate: bus,
-  tracer: tracer,
-  transport: 'nats',
-);
-```
-
-Message IDs, tenant IDs, email addresses, and arbitrary routing keys should not be Prometheus labels. The registry uses an allow-list and a hard series limit because an observability layer should not become the next outage.
-
-## Serverpod
-
-`podbus_serverpod` opens a fresh Serverpod session for each message and closes it after the handler finishes. Startup is failure-atomic: if registration fails, already-opened transports are closed.
-
-```dart
-final messaging = ServerpodMessaging<Session>(
-  bus: bus,
-  queue: jobs,
-  sessionFactory: () => pod.createSession(enableLogging: true),
-  closeSession: (session) => session.close(),
-);
-
-await messaging.start();
-```
-
-## Packages
-
-| Package | Responsibility |
-| --- | --- |
-| `podbus_core` | Contracts, codecs, policies, limits, in-memory implementations |
-| `podbus_nats` | NATS Core and JetStream adapters |
-| `podbus_rabbitmq` | RabbitMQ messaging and durable workers |
-| `podbus_kafka` | Experimental Kafka adapter and native `librdkafka` bindings |
-| `podbus_postgres` | Transactional outbox, inbox leases, persistent idempotency |
-| `podbus_observability` | Tracing, Prometheus metrics, JSON logs, health probes |
-| `podbus_serverpod` | Serverpod lifecycle and session integration |
-
-## Production guidance
-
-The repository includes operational material alongside the library:
-
-- [Production deployment](docs/production.md)
-- [Incident runbook](docs/runbook.md)
-- [Disaster recovery](docs/disaster-recovery.md)
-- [Upgrade guide](docs/upgrading.md)
-- [Production-readiness audit](docs/production-readiness-audit.md)
-- [Kubernetes worker example](deploy/kubernetes/podbus-worker.yaml)
-- [Prometheus alert rules](deploy/prometheus/podbus-alerts.yml)
-- [Repository protection](docs/repository-settings.md)
+See [Reliability](docs/reliability.md), [Production deployment](docs/production.md), [Incident runbook](docs/runbook.md), and [Upgrade guide](docs/upgrading.md).
 
 ## Development
 
@@ -339,19 +230,13 @@ PODBUS_RUN_INTEGRATION_TESTS=true dart test \
   --tags=integration
 ```
 
-Benchmarks in distributed systems are configuration-dependent. The stress tools in `tool/` are intended for regression detection and capacity work on a documented environment, not for claiming one universal messages-per-second number.
+Validate all pub.dev archives without publishing:
 
-## Project status
+```bash
+dart run tool/publish_packages.dart --dry-run
+```
 
-Before the first stable release, the work is focused on:
-
-- long-running fault and soak tests across supported broker versions
-- stable Kafka rebalance and delivery-report behavior
-- compatibility fixtures for wire-schema evolution
-- independent production evaluations
-- package publication after the API surface settles
-
-A `1.0.0` release will mean a documented compatibility policy and a stable public API. It will not mean exactly-once delivery across arbitrary external side effects.
+Actual publication is deliberately separate and guarded. It will be performed only after the beta PR is green and reviewed.
 
 ## Contributing
 
@@ -359,7 +244,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Changes t
 
 ## Security
 
-Report vulnerabilities through the process described in [SECURITY.md](SECURITY.md). Do not disclose security issues in a public GitHub issue.
+Report vulnerabilities through [SECURITY.md](SECURITY.md). Do not disclose security issues in a public issue.
 
 ## License
 
