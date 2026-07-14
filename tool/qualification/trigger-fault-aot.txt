@@ -1,0 +1,1 @@
+Compile the fault suite to AOT and verify clean process exit for NATS and RabbitMQ scenarios.
