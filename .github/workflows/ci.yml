@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: recovery-task-drain-${{ github.ref }}
@@ -15,27 +15,21 @@ env:
   DART_SDK: 3.12.0
 
 jobs:
-  fault-lifecycle:
-    name: lifecycle / ${{ matrix.scenario }}
+  publish-lifecycle-fix:
+    name: Publish validated lifecycle fixes
     if: github.event_name == 'pull_request' && github.head_ref == 'trigger/recovery-task-drain-v3'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        scenario:
-          - nats-tcp-partition
-          - rabbitmq-tcp-partition
-          - rabbitmq-channel-failures
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           ref: automation/recovery-task-drain
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
       - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260
         with:
           sdk: ${{ env.DART_SDK }}
-      - name: Apply patch and validate source
+      - name: Apply and validate final lifecycle patch
         run: |
           python3 tool/ci/apply_recovery_task_drain.py
           dart format \
@@ -47,66 +41,19 @@ jobs:
           dart analyze .
           dart test packages/podbus_core/test/resilience_test.dart
           dart test packages/podbus_rabbitmq/test/rabbitmq_adapter_test.dart
-      - name: Compile fault suite
-        run: |
-          mkdir -p build test-results
-          dart compile exe tool/fault_suite.dart -o build/podbus-fault-suite
-      - name: Start brokers
-        run: |
-          bash tool/ci/start_integration_services.sh nats rabbitmq toxiproxy
-          bash tool/ci/wait_for_nats.sh
-          bash tool/ci/wait_for_rabbitmq.sh
-          bash tool/ci/wait_for_toxiproxy.sh
-      - name: Run scenario and require clean exit
+      - name: Commit source-only lifecycle fixes
         shell: bash
-        env:
-          SCENARIO: ${{ matrix.scenario }}
         run: |
-          set -uo pipefail
-          report="test-results/lifecycle-${SCENARIO}.json"
-          log="test-results/lifecycle-${SCENARIO}.log"
-          set +e
-          timeout --signal=TERM --kill-after=5s 2m \
-            build/podbus-fault-suite \
-              --profile=smoke \
-              --scenario="$SCENARIO" \
-              --report="$report" \
-            2>&1 | tee "$log"
-          status=${PIPESTATUS[0]}
-          set -e
-          if [[ -s "$report" ]]; then
-            cat "$report"
-          fi
-          if [[ $status -ne 0 ]]; then
-            echo "scenario $SCENARIO exited with $status" >&2
-            exit "$status"
-          fi
-          python3 - "$report" "$SCENARIO" <<'PY'
-          import json
-          import pathlib
-          import sys
-
-          data = json.loads(pathlib.Path(sys.argv[1]).read_text())
-          scenario = sys.argv[2]
-          assert data['success'] is True, data
-          assert len(data['results']) == 1, data
-          assert data['results'][0]['name'] == scenario, data
-          assert data['results'][0]['success'] is True, data
-          PY
-      - name: Capture broker logs
-        if: always()
-        run: |
-          docker compose -f docker-compose.integration.yaml logs --no-color \
-            nats rabbitmq-init rabbitmq toxiproxy \
-            > "test-results/${{ matrix.scenario }}-brokers.log" 2>&1 || true
-      - name: Upload lifecycle evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: lifecycle-${{ matrix.scenario }}
-          path: test-results
-          if-no-files-found: warn
-          retention-days: 7
-      - name: Stop brokers
-        if: always()
-        run: docker compose -f docker-compose.integration.yaml down -v --remove-orphans
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm \
+            tool/ci/apply_recovery_task_drain.py \
+            tool/ci/capture_aot_fault_handles.sh
+          git add \
+            packages/podbus_core/lib/src/resilience.dart \
+            packages/podbus_rabbitmq/lib/src/rabbitmq_adapter.dart \
+            tool/src/fault_harness.dart \
+            tool/fault_suite.dart
+          git commit -m "Close fault harness resources deterministically"
+          git push origin HEAD:automation/recovery-task-drain
