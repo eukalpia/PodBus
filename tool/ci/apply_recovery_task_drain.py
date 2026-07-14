@@ -127,3 +127,109 @@ if source.count(retry_marker) != 2:
     )
 source = source.replace(retry_marker, retry_replacement)
 path.write_text(source)
+
+adapter = Path('packages/podbus_rabbitmq/lib/src/rabbitmq_adapter.dart')
+source = adapter.read_text()
+
+field_marker = '''  var _publisherConfirmTimeout = const Duration(seconds: 5);
+  var _mandatoryPublish = true;'''
+field_replacement = '''  var _publisherConfirmTimeout = const Duration(seconds: 5);
+  var _closeTimeout = const Duration(seconds: 5);
+  var _mandatoryPublish = true;'''
+if field_marker not in source:
+    raise SystemExit('RabbitMQ close-timeout field marker not found')
+source = source.replace(field_marker, field_replacement, 1)
+
+connect_marker = '''    _publisherConfirmTimeout = config.publisherConfirmTimeout;
+    _mandatoryPublish = config.mandatoryPublish;'''
+connect_replacement = '''    _publisherConfirmTimeout = config.publisherConfirmTimeout;
+    _closeTimeout = config.connectTimeout;
+    _mandatoryPublish = config.mandatoryPublish;'''
+if connect_marker not in source:
+    raise SystemExit('RabbitMQ close-timeout connect marker not found')
+source = source.replace(connect_marker, connect_replacement, 1)
+
+close_old = '''  @override
+  Future<void> close() async {
+    _connected = false;
+    _publishEpoch += 1;
+    _failPendingPublishes(
+      const MessagingConnectionException(
+        'RabbitMQ adapter closed before publisher confirmation.',
+      ),
+    );
+
+    await _clientErrors?.cancel();
+    _clientErrors = null;
+    for (final lane in _publisherLanes) {
+      await lane.close();
+    }
+    _publisherLanes.clear();
+    await _consumerChannel?.close();
+    await _client?.close();
+    _consumerChannel = null;
+    _client = null;
+    _consumerExchanges.clear();
+    _queues.clear();
+  }
+'''
+close_new = '''  @override
+  Future<void> close() async {
+    _connected = false;
+    _publishEpoch += 1;
+    _failPendingPublishes(
+      const MessagingConnectionException(
+        'RabbitMQ adapter closed before publisher confirmation.',
+      ),
+    );
+
+    final clientErrors = _clientErrors;
+    final lanes = _publisherLanes.toList();
+    final consumerChannel = _consumerChannel;
+    final client = _client;
+    _clientErrors = null;
+    _publisherLanes.clear();
+    _consumerChannel = null;
+    _client = null;
+    _consumerExchanges.clear();
+    _queues.clear();
+
+    Object? failure;
+    StackTrace? failureStackTrace;
+
+    Future<void> guard(String component, Future<void> Function() action) async {
+      try {
+        await action().timeout(
+          _closeTimeout,
+          onTimeout: () => throw MessagingTimeoutException(
+            'RabbitMQ adapter $component close exceeded $_closeTimeout.',
+            timeout: _closeTimeout,
+          ),
+        );
+      } on Object catch (error, stackTrace) {
+        failure ??= error;
+        failureStackTrace ??= stackTrace;
+      }
+    }
+
+    // A protocol-level channel failure can make channel.close() wait forever.
+    // Close the owning client at the same time so the socket releases every
+    // publisher/consumer channel while best-effort cleanup continues.
+    await Future.wait([
+      if (clientErrors != null)
+        guard('error subscription', clientErrors.cancel),
+      if (client != null) guard('client', client.close),
+      if (consumerChannel != null)
+        guard('consumer channel', consumerChannel.close),
+      for (final lane in lanes) guard('publisher lane', lane.close),
+    ]);
+
+    if (failure != null) {
+      Error.throwWithStackTrace(failure!, failureStackTrace!);
+    }
+  }
+'''
+if close_old not in source:
+    raise SystemExit('RabbitMQ adapter close block not found')
+source = source.replace(close_old, close_new, 1)
+adapter.write_text(source)
