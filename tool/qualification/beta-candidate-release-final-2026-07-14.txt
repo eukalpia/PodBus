@@ -1,0 +1,11 @@
+PodBus 0.1.0-beta.1 immutable final qualification
+
+This is the final qualification marker after all runtime, workflow, README, website, changelog, and evidence changes.
+
+No source or documentation commits may follow this marker before qualification completes.
+
+Required on this exact SHA:
+- CI, compatibility, security, website, and plain-Dart deployment;
+- 3.25 million mandatory NATS Core, JetStream, and RabbitMQ messages;
+- twelve AOT fault scenarios with validated JSON reports;
+- one uninterrupted AOT one-hour soak with zero missing acknowledged messages and zero asynchronous operation errors.
