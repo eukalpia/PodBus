@@ -47,6 +47,7 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
   DateTime? _lastWorkerErrorAt;
   var _connected = false;
   var _closing = false;
+  Future<void>? _closeFuture;
 
   MessageCodec get _codec => messagingConfig.codec;
 
@@ -84,40 +85,51 @@ final class RabbitMqMessageBus implements MessageBus, DurableJobQueue {
   }
 
   @override
-  Future<void> close({Duration? timeout}) async {
-    if (_closing) {
-      return;
-    }
+  Future<void> close({Duration? timeout}) {
+    final existing = _closeFuture;
+    if (existing != null) return existing;
+    final effectiveTimeout = timeout ?? messagingConfig.shutdownTimeout;
+    late final Future<void> closing;
+    closing = _closeResources(effectiveTimeout).whenComplete(() {
+      if (identical(_closeFuture, closing)) _closeFuture = null;
+    });
+    _closeFuture = closing;
+    return closing;
+  }
+
+  Future<void> _closeResources(Duration effectiveTimeout) async {
     _closing = true;
     _connected = false;
-    final effectiveTimeout = timeout ?? messagingConfig.shutdownTimeout;
+    final subscriptions = _subscriptions.toList();
+    final workers = _workers.toList();
+    _subscriptions.clear();
+    _workers.clear();
     Object? failure;
     StackTrace? failureStackTrace;
+    Future<void> guard(Future<void> Function() action) async {
+      try {
+        await action().timeout(effectiveTimeout);
+      } on Object catch (e, s) {
+        failure ??= e;
+        failureStackTrace ??= s;
+      }
+    }
 
     try {
       await Future.wait([
-        for (final subscription in _subscriptions.toList())
-          subscription.close(),
-        for (final worker in _workers.toList()) worker.close(),
-      ]).timeout(effectiveTimeout);
-      _subscriptions.clear();
-      _workers.clear();
-    } on Object catch (error, stackTrace) {
-      failure = error;
-      failureStackTrace = stackTrace;
+        guard(_adapter.close),
+        guard(
+          () => Future.wait([
+            for (final subscription in subscriptions) subscription.close(),
+            for (final worker in workers) worker.close(),
+          ]),
+        ),
+      ]);
     } finally {
-      try {
-        await _adapter.close();
-      } on Object catch (error, stackTrace) {
-        failure ??= error;
-        failureStackTrace ??= stackTrace;
-      }
       _closing = false;
     }
-
-    if (failure != null) {
-      Error.throwWithStackTrace(failure, failureStackTrace!);
-    }
+    if (failure != null)
+      Error.throwWithStackTrace(failure!, failureStackTrace!);
   }
 
   @override
