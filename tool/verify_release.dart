@@ -47,9 +47,13 @@ void main(List<String> arguments) {
       failures.add('${pubspec.path} issue_tracker must be $_issueTracker.');
     }
     if (fields.containsKey('publish_to')) {
-      failures.add('${pubspec.path} must use the default pub.dev publisher; remove publish_to.');
+      failures.add(
+        '${pubspec.path} must use the default pub.dev publisher; remove publish_to.',
+      );
     }
-    if (content.contains(RegExp(r'^\s+path:\s+\.\./podbus_', multiLine: true))) {
+    if (content.contains(
+      RegExp(r'^\s+path:\s+\.\./podbus_', multiLine: true),
+    )) {
       failures.add('${pubspec.path} contains a local PodBus path dependency.');
     }
 
@@ -73,13 +77,19 @@ void main(List<String> arguments) {
     for (final package in _packages.where((name) => name != 'podbus_core')) {
       final content = File('packages/$package/pubspec.yaml').readAsStringSync();
       if (!content.contains('podbus_core: ^$version')) {
-        failures.add('packages/$package/pubspec.yaml must depend on podbus_core: ^$version.');
+        failures.add(
+          'packages/$package/pubspec.yaml must depend on podbus_core: ^$version.',
+        );
       }
     }
     for (final package in _packages) {
-      final changelog = File('packages/$package/CHANGELOG.md').readAsStringSync();
+      final changelog = File(
+        'packages/$package/CHANGELOG.md',
+      ).readAsStringSync();
       if (!changelog.contains(version)) {
-        failures.add('packages/$package/CHANGELOG.md does not mention $version.');
+        failures.add(
+          'packages/$package/CHANGELOG.md does not mention $version.',
+        );
       }
     }
     final readme = File('README.md').readAsStringSync();

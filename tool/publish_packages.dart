@@ -36,7 +36,9 @@ Future<void> main(List<String> arguments) async {
   }
 
   for (final package in _packages) {
-    stdout.writeln('\n=== ${publish ? 'Publishing' : 'Checking'} $package $version ===');
+    stdout.writeln(
+      '\n=== ${publish ? 'Publishing' : 'Checking'} $package $version ===',
+    );
     await _run('dart', [
       'pub',
       '-C',
@@ -49,7 +51,10 @@ Future<void> main(List<String> arguments) async {
 
 String _readVersion() {
   final content = File('packages/podbus_core/pubspec.yaml').readAsStringSync();
-  final match = RegExp(r'^version:\s*(\S+)\s*$', multiLine: true).firstMatch(content);
+  final match = RegExp(
+    r'^version:\s*(\S+)\s*$',
+    multiLine: true,
+  ).firstMatch(content);
   if (match == null) {
     throw StateError('podbus_core version is missing.');
   }
@@ -69,6 +74,11 @@ Future<void> _run(String executable, List<String> arguments) async {
   );
   final result = await process.exitCode;
   if (result != 0) {
-    throw ProcessException(executable, arguments, 'Exited with $result', result);
+    throw ProcessException(
+      executable,
+      arguments,
+      'Exited with $result',
+      result,
+    );
   }
 }
