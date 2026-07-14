@@ -1,0 +1,5 @@
+PodBus 0.1.0-beta.1 immutable qualification freeze
+
+All runtime, workflow, README, website, changelog, and qualification evidence changes are complete.
+
+This exact commit is frozen until every mandatory workflow completes.
